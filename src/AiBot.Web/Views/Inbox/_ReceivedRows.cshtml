@@ -1,0 +1,10 @@
+@model InboxListModel
+@{ var result = Model.Messages; var filter = Model.Filter; }
+@if (result.Items.Count == 0) {
+ <div class="empty-state"><div class="empty-art"><svg><use href="#i-list"/></svg></div><h3>暂无收到的消息</h3><p>连接成功后，在企微单聊中给机器人发消息，<br/>或在机器人所在群聊中 @@机器人。也可以调整筛选条件。</p></div>
+} else {
+ <div class="table-scroll"><table><thead><tr><th>机器人 / 发送人</th><th>会话</th><th>内容</th><th>类型</th><th>接收时间 UTC+8</th><th></th></tr></thead><tbody>@foreach (var message in result.Items) {
+ <tr><td><div class="table-identity"><span class="bot-avatar small"><svg><use href="#i-bot"/></svg></span><div><strong>@message.RobotName</strong><small class="mono">@message.SenderUserId</small></div></div></td><td><span class="badge @(message.ChatType == "group" ? "warning" : "neutral")">@(message.ChatType == "group" ? "群聊" : "单聊")</span>@if (!string.IsNullOrEmpty(message.ChatId)) { <small class="inbox-chatid mono" title="@message.ChatId">@message.ChatId</small> }</td><td class="message-cell"><a class="inbox-excerpt" asp-action="Details" asp-route-id="@message.Id">@(message.Content.Length > 70 ? message.Content[..70] + "…" : message.Content)</a></td><td>@Display.MessageType(message.MessageType)</td><td class="date-cell mono">@Display.Time(message.ReceivedAt)</td><td><a class="text-link" asp-action="Details" asp-route-id="@message.Id">详情<svg><use href="#i-arrow"/></svg></a></td></tr>
+ }</tbody></table></div>
+}
+<div class="pagination"><span>共 @result.Total 条 · 第 @result.Page / @result.Pages 页</span><div>@if (result.Page > 1) { <a class="button secondary compact" asp-action="Index" asp-route-Page="@(result.Page - 1)" asp-route-RobotId="@filter.RobotId" asp-route-ChatType="@filter.ChatType" asp-route-MessageType="@filter.MessageType" asp-route-Search="@filter.Search">上一页</a> }@if (result.Page < result.Pages) { <a class="button secondary compact" asp-action="Index" asp-route-Page="@(result.Page + 1)" asp-route-RobotId="@filter.RobotId" asp-route-ChatType="@filter.ChatType" asp-route-MessageType="@filter.MessageType" asp-route-Search="@filter.Search">下一页</a> }</div></div>

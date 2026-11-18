@@ -1,0 +1,8 @@
+@model ReceivedMessage
+
+@{ ViewData["Title"] = "接收消息详情"; }
+<div class="page-heading"><div><div class="eyebrow">MESSAGE DETAILS</div><h1>接收消息详情<span class="heading-dot">.</span></h1><p>@Model.RobotName · @Display.Time(Model.ReceivedAt)（北京时间）</p></div><a class="button secondary" asp-action="Index">返回接收消息</a></div>
+<section class="panel inbox-detail"><div class="panel-heading"><div><h2>消息内容</h2><p>@Display.MessageType(Model.MessageType) · @(Model.ChatType == "group" ? "群聊" : "单聊")</p></div><a class="button primary" asp-controller="Robots" asp-action="Send" asp-route-id="@Model.RobotId" asp-route-targetType="@Model.ChatType" asp-route-targetId="@(Model.ChatType == "group" ? Model.ChatId : Model.SenderUserId)">向此会话发送<svg><use href="#i-arrow"/></svg></a></div>
+<div class="form-body"><dl class="message-metadata"><div><dt>发送人 User ID</dt><dd class="mono">@Model.SenderUserId</dd></div><div><dt>群聊 Chat ID</dt><dd class="mono">@(string.IsNullOrEmpty(Model.ChatId) ? "—" : Model.ChatId)</dd></div><div><dt>消息 ID</dt><dd class="mono">@Model.MessageId</dd></div><div><dt>请求 ID</dt><dd class="mono">@Model.RequestId</dd></div><div><dt>企微消息时间</dt><dd>@(Model.SentAt is { } sent ? Display.Time(sent) : "回调未提供")</dd></div><div><dt>系统接收时间</dt><dd>@Display.Time(Model.ReceivedAt)</dd></div></dl><pre class="received-content">@Model.Content</pre><details class="payload-details"><summary>查看脱敏回调数据</summary><p class="field-help">媒体下载地址、附件解密密钥和临时回复地址已隐藏。</p><pre>@Model.PayloadJson</pre></details></div></section>
+
+<partial name="_AutoReplyDetails"/>

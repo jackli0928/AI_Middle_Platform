@@ -1,0 +1,17 @@
+@model InboxViewModel
+@{ ViewData["Title"] = "接收消息"; var filter = Model.List.Filter; }
+<div class="page-heading"><div><div class="eyebrow">INCOMING MESSAGES</div><h1>接收消息<span class="heading-dot">.</span></h1><p>实时接收发给机器人的消息，保留每一次会话记录。</p></div><a class="button secondary" asp-controller="Robots" asp-action="Index"><svg><use href="#i-bot"/></svg>管理机器人</a></div>
+<section class="panel inbox-connections"><div class="panel-heading"><div><h2>机器人连接</h2><p>启用的机器人由后台持续连接，主动发送与接收共用连接</p></div><span class="badge success"><span></span><b id="online-count">@Model.Connections.Count(x => x.State == "online") / @Model.Connections.Count 已连接</b></span></div>
+@if (Model.Connections.Count == 0) { <div class="inbox-connection-empty">暂无连接状态。请先添加并启用机器人；刚启动时请等待几秒。</div> }
+@foreach (var connection in Model.Connections) {
+ <div class="connection-row" data-robot-id="@connection.RobotId"><div class="connection-name"><span class="bot-avatar small"><svg><use href="#i-bot"/></svg></span><div><strong>@connection.RobotName</strong><small class="mono">@connection.BotId</small></div></div><div class="connection-description"><span class="badge @Display.ConnectionTone(connection.State)" data-connection-state>@Display.Connection(connection.State)</span><p data-connection-description>@connection.Description</p><small data-connection-heartbeat>最近心跳：@(connection.LastHeartbeatAt is { } heartbeat ? Display.Time(heartbeat) : "等待心跳")</small></div><form asp-action="Reconnect" method="post"><input name="id" type="hidden" value="@connection.RobotId"/><button class="button secondary compact" disabled="@(connection.State == "disabled")">重新连接</button></form></div>
+}
+</section>
+<section class="panel inbox-panel"><div class="panel-heading"><div><h2>收到的消息</h2><p>支持按机器人、会话类型、消息类型和内容查询</p></div><label class="live-toggle"><input type="checkbox" id="inbox-live" checked/>每 15 秒刷新</label></div>
+<form asp-action="Index" method="get" class="inbox-filters">
+ <div class="field"><label for="inbox-robot">机器人</label><select id="inbox-robot" name="RobotId"><option value="">全部机器人</option>@foreach (var robot in Model.Robots) { <option value="@robot.Id" selected="@(filter.RobotId == robot.Id)">@robot.Name</option> }</select></div>
+ <div class="field"><label for="inbox-chat">会话类型</label><select id="inbox-chat" name="ChatType"><option value="">全部会话</option><option value="single" selected="@(filter.ChatType == "single")">单聊</option><option value="group" selected="@(filter.ChatType == "group")">群聊</option></select></div>
+ <div class="field"><label for="inbox-type">消息类型</label><select id="inbox-type" name="MessageType"><option value="">全部类型</option>@foreach (var type in new[] { "text", "image", "mixed", "voice", "file", "video" }) { <option value="@type" selected="@(filter.MessageType == type)">@Display.MessageType(type)</option> }</select></div>
+ <div class="field inbox-search"><label for="inbox-search">搜索</label><input id="inbox-search" name="Search" value="@filter.Search" maxlength="200" placeholder="发送人、Chat ID 或消息内容"/></div><button class="button primary" type="submit"><svg><use href="#i-search"/></svg>查询</button><a class="button secondary" asp-action="Index">重置</a>
+</form><div id="inbox-results"><partial name="_ReceivedRows" model="Model.List"/></div><div class="inbox-refresh" id="inbox-refresh" role="status">自动刷新保持当前筛选条件，不会发送或回复消息。</div></section>
+<div class="inline-note"><svg><use href="#i-info"/></svg>从机器人连接成功后开始接收。媒体消息保留类型和脱敏回调，不自动下载附件；未接收到的历史消息无法补拉。</div>

@@ -1,0 +1,9 @@
+@{ var reply = ViewBag.AutoReply as AutoReplyLog; }
+<section class="panel inbox-detail auto-reply-detail"><div class="panel-heading"><div><h2>自动回复</h2><p>查看本次消息是否触发回复及执行结果</p></div>@if (reply is not null) { <span class="badge @(reply.Status == "accepted" ? "success" : reply.Status == "failed" ? "danger" : "warning")">@Display.AutoReplyStatus(reply.Status)</span> }</div><div class="form-body">
+@if (reply is null) { <p class="muted">本次消息未触发自动回复：可能未启用自动回复，或消息不在适用范围内。</p> } else {
+ <div class="auto-reply-mode">回复机制：@(reply.Mode == "knowledge" ? "知识库匹配" : "AI 回复") @if (!string.IsNullOrEmpty(reply.ModelName)) { <span> · @reply.ModelName</span> }</div><p>@reply.Result</p>
+ @if (!string.IsNullOrEmpty(reply.ReplyContent)) { <h3>回复内容</h3><pre>@reply.ReplyContent</pre> }
+ @if (!string.IsNullOrEmpty(reply.Attempts)) { <details class="auto-attempts"><summary>模型优先级执行记录</summary><pre>@reply.Attempts</pre></details> }
+ <div class="field-help">开始：@Display.FullTime(reply.CreatedAt) @if (reply.CompletedAt is { } completed) { <span> · 完成：@Display.FullTime(completed)</span> }<br/>未确认或未完成的任务不会自动重发；请先检查企微会话。</div>
+}
+</div></section>

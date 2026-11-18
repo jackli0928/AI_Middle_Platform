@@ -1,0 +1,24 @@
+@model IReadOnlyList<MessageLog>
+@if (Model.Count == 0) {
+ <div class="empty-state"><div class="empty-art"><svg><use href="#i-send"/></svg></div><h3>等待第一条消息</h3><p>选择机器人，向企微账号或群聊发送消息。<br/>发送结果与回执会在这里留存。</p><a class="button secondary" asp-controller="Robots" asp-action="Send">发送消息<svg><use href="#i-arrow"/></svg></a></div>
+} else {
+ <div class="table-scroll"><table><thead><tr><th>机器人 / 发送对象</th><th>消息内容</th><th>发送状态</th><th>发送时间 <span class="muted">UTC+8</span></th><th>操作人</th></tr></thead><tbody>
+ @foreach (var item in Model) {
+  <tr><td><div class="table-identity"><span class="bot-avatar small"><svg><use href="#i-bot"/></svg></span><div><strong>@item.RobotName</strong><small class="mono">@(item.TargetType == "group" ? "群聊" : "单聊") · @item.TargetId</small></div></div></td><td class="message-cell">
+   <button class="message-detail-trigger" type="button" data-message-template="message-details-@item.Id" aria-haspopup="dialog" aria-controls="message-detail-dialog" title="查看消息详情">@(item.Content.Length > 36 ? item.Content[..36] + "…" : item.Content)</button>
+   <template id="message-details-@item.Id">
+    <dl class="send-message-metadata">
+     <div><dt>机器人</dt><dd>@item.RobotName</dd></div>
+     <div><dt>发送状态</dt><dd><span class="badge @Display.Tone(item.Status)"><span></span>@Display.Status(item.Status)</span></dd></div>
+     <div><dt>发送对象</dt><dd>@(item.TargetType == "group" ? "群聊" : "单聊")</dd></div>
+     <div><dt>@(item.TargetType == "group" ? "群聊 Chat ID" : "接收人 User ID")</dt><dd class="mono">@item.TargetId</dd></div>
+     <div><dt>发送时间（北京时间）</dt><dd>@Display.FullTime(item.CreatedAt)</dd></div>
+     <div><dt>操作人</dt><dd>@item.Operator</dd></div>
+    </dl>
+    <section class="message-detail-section"><h3>完整消息内容 <span>Markdown 原文</span></h3><pre class="send-message-content">@item.Content</pre></section>
+    <section class="message-detail-section"><h3>发送回执</h3><p class="send-message-result">@item.Result</p><dl class="send-message-metadata receipt-metadata"><div><dt>错误码</dt><dd class="mono">@(item.ErrorCode?.ToString() ?? "—")</dd></div><div><dt>请求 ID</dt><dd class="mono">@(string.IsNullOrEmpty(item.RequestId) ? "—" : item.RequestId)</dd></div><div class="message-record-id"><dt>记录 ID</dt><dd class="mono">@item.Id</dd></div></dl></section>
+   </template>
+  </td><td><span class="badge @Display.Tone(item.Status)"><span></span>@Display.Status(item.Status)</span></td><td class="mono date-cell">@Display.Time(item.CreatedAt)</td><td>@item.Operator</td></tr>
+ }
+ </tbody></table></div>
+}
