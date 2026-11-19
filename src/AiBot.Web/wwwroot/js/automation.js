@@ -8,6 +8,10 @@ function updateReplySettings() {
     document.querySelector('#ai-reply-options').hidden = !['ai', 'quote'].includes(replyMode.value);
     document.querySelector('#quote-reply-help').hidden = replyMode.value !== 'quote';
     document.querySelector('#group-reply-setting').hidden = replyMode.value === 'quote';
+    document.querySelector('#model-choice-label').textContent = replyMode.value === 'quote' ? '询价解析方式' : 'AI 模型优先级';
+    document.querySelectorAll('#model-priority-list select, #model-priority-template select').forEach(select => {
+        select.options[0].textContent = replyMode.value === 'quote' ? '报价 MCP（无需模型）' : '选择模型接口';
+    });
 }
 replyEnabled?.addEventListener('change', updateReplySettings); replyMode?.addEventListener('change', updateReplySettings); updateReplySettings();
 const priorities = document.querySelector('#model-priority-list');

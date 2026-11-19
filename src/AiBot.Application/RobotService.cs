@@ -16,7 +16,8 @@ public sealed class RobotService(IRobotRepository repository, ISecretProtector s
         var priorities = input.ModelPriority.Where(x => x != Guid.Empty).ToList();
         var models = await automation.ModelsAsync(ct);
         if (priorities.Any(id => models.All(x => x.Id != id))) throw new ArgumentException("优先级列表中包含不存在的模型，请重新选择。");
-        if (input.AutoReplyEnabled && (input.ReplyMode is "ai" or "quote") && !models.Any(x => priorities.Contains(x.Id) && x.Enabled)) throw new ArgumentException("请至少选择一个已启用且已配置密钥的 AI 模型。");
+        if (input.AutoReplyEnabled && input.ReplyMode == "ai" && !models.Any(x => priorities.Contains(x.Id) && x.Enabled)) throw new ArgumentException("请至少选择一个已启用且已配置密钥的 AI 模型。");
+        if (input.AutoReplyEnabled && input.ReplyMode == "quote" && priorities.Count > 0 && !models.Any(x => priorities.Contains(x.Id) && x.Enabled)) throw new ArgumentException("所选报价字段提取模型不可用。");
         if (input.Id is { } id)
         {
             var robot = await repository.FindAsync(id, ct) ?? throw new ArgumentException("机器人不存在或已被删除。");

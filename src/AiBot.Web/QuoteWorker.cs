@@ -84,25 +84,32 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
             if (robot is null || !robot.Enabled || !robot.AutoReplyEnabled || robot.ReplyMode != "quote")
             { log.Complete("skipped", "", "", "报价机器人已停用。", ""); return; }
             var models = await db.AiModels.AsNoTracking().Where(x => x.Enabled).ToListAsync(ct);
-            var model = robot.GetModelPriority().Select(id => models.FirstOrDefault(x => x.Id == id)).FirstOrDefault(x => x is not null)
-                ?? throw new InvalidOperationException("报价字段提取模型不可用。");
-            var extraction = await scope.ServiceProvider.GetRequiredService<IAiCompletionClient>().CompleteAsync(model,
-                "从当前空运询价中提取 JSON 对象，只输出 JSON，不解释。字段仅允许 origin、destination、piece、gross_weight、volume、cargo_type、server_type、packing、customs、delivery_time。必须从原文明确取得值，不推测。piece 为整数，重量 kg 和体积 m³ 为数字。缺失字段省略。", message.Content, ct);
-            var jsonText = extraction.Trim();
-            if (jsonText.StartsWith("```", StringComparison.Ordinal))
-                jsonText = jsonText[(jsonText.IndexOf('\n') + 1)..jsonText.LastIndexOf("```", StringComparison.Ordinal)].Trim();
-            using var parsed = JsonDocument.Parse(jsonText);
-            if (parsed.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("询价字段提取结果无效。");
-            var fields = new Dictionary<string, object>();
-            foreach (var name in new[] { "origin", "destination", "cargo_type", "server_type", "packing", "customs", "delivery_time" })
-                if (parsed.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-                    && !string.IsNullOrWhiteSpace(value.GetString())) fields[name] = value.GetString()!;
-            if (parsed.RootElement.TryGetProperty("piece", out var pieces) && pieces.ValueKind == JsonValueKind.Number
-                && pieces.TryGetInt32(out var piece) && piece > 0)
-                fields["piece"] = piece;
-            foreach (var name in new[] { "gross_weight", "volume" })
-                if (parsed.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-                    && value.TryGetDouble(out var number) && double.IsFinite(number) && number > 0) fields[name] = number;
+            var model = robot.GetModelPriority().Select(id => models.FirstOrDefault(x => x.Id == id)).FirstOrDefault(x => x is not null);
+            Dictionary<string, object> fields;
+            if (model is null)
+            {
+                fields = QuoteInquiryParser.Parse(message.Content);
+            }
+            else
+            {
+                var extraction = await scope.ServiceProvider.GetRequiredService<IAiCompletionClient>().CompleteAsync(model,
+                    "从当前空运询价中提取 JSON 对象，只输出 JSON，不解释。字段仅允许 origin、destination、piece、gross_weight、volume、cargo_type、server_type、packing、customs、delivery_time。必须从原文明确取得值，不推测。piece 为整数，重量 kg 和体积 m³ 为数字。缺失字段省略。", message.Content, ct);
+                var jsonText = extraction.Trim();
+                if (jsonText.StartsWith("```", StringComparison.Ordinal))
+                    jsonText = jsonText[(jsonText.IndexOf('\n') + 1)..jsonText.LastIndexOf("```", StringComparison.Ordinal)].Trim();
+                using var parsed = JsonDocument.Parse(jsonText);
+                if (parsed.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("询价字段提取结果无效。");
+                fields = new Dictionary<string, object>();
+                foreach (var name in new[] { "origin", "destination", "cargo_type", "server_type", "packing", "customs", "delivery_time" })
+                    if (parsed.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(value.GetString())) fields[name] = value.GetString()!;
+                if (parsed.RootElement.TryGetProperty("piece", out var pieces) && pieces.ValueKind == JsonValueKind.Number
+                    && pieces.TryGetInt32(out var piece) && piece > 0)
+                    fields["piece"] = piece;
+                foreach (var name in new[] { "gross_weight", "volume" })
+                    if (parsed.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
+                        && value.TryGetDouble(out var number) && double.IsFinite(number) && number > 0) fields[name] = number;
+            }
             var missing = new[] { "destination", "piece", "gross_weight", "volume" }.Where(x => !fields.ContainsKey(x)).ToArray();
             if (missing.Length > 0)
                 answer = "请补充询价信息：" + string.Join("、", missing.Select(x => x switch { "destination" => "目的地", "piece" => "件数", "gross_weight" => "总毛重（kg）", _ => "总体积（m³）" })) + "。请在下一条消息中发送完整询价。";

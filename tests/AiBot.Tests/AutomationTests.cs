@@ -54,6 +54,13 @@ internal static class AutomationTests
         await Handle(Message("group")); await Handle(Message(type: "voice"));
         check(gateway.Calls == before && repository.Replies.Count(x => x.ReceivedMessageId == quoteMessage.Id) == 1
             && repository.Replies.Last(x => x.ReceivedMessageId == quoteMessage.Id).Status == "queued", "报价单聊只登记一次后台任务，不阻塞接收或直接发送");
+        robot.ConfigureAutoReply(true, "quote", false, "", []);
+        check(robot.GetModelPriority().Count == 0, "报价模式可以不配置 AI 模型");
+        var parsedInquiry = QuoteInquiryParser.Parse("上海到洛杉矶，10件，200kg，2方");
+        check((string)parsedInquiry["destination"] == "洛杉矶" && (int)parsedInquiry["piece"] == 10
+            && (double)parsedInquiry["gross_weight"] == 200 && (double)parsedInquiry["volume"] == 2,
+            "报价 MCP 可从明确格式询价提取必填字段");
+        check(!QuoteInquiryParser.Parse("到洛杉矶，10件，200kg").ContainsKey("volume"), "缺失体积时不会猜测报价参数");
         var longText = AutoReplyService.LimitUtf8(string.Concat(Enumerable.Repeat("中文😀", 1000)), 4096);
         check(Encoding.UTF8.GetByteCount(longText) <= 4096 && !longText.Contains('\uFFFD'), "AI 超长回复按 UTF-8 截断且不损坏 Unicode 字符");
 

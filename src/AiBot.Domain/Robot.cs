@@ -25,7 +25,7 @@ public sealed class Robot
         if (prompt.Length > 2000) throw new ArgumentException("AI 提示词不能超过 2000 字。");
         var ids = models.Where(x => x != Guid.Empty).ToList();
         if (ids.Count > 8 || ids.Distinct().Count() != ids.Count) throw new ArgumentException("最多设置 8 个模型，且不能重复。");
-        if (enabled && (mode is "ai" or "quote") && ids.Count == 0) throw new ArgumentException("启用 AI 回复或报价时请至少选择一个模型。");
+        if (enabled && mode == "ai" && ids.Count == 0) throw new ArgumentException("启用 AI 回复时请至少选择一个模型。");
         AutoReplyEnabled = enabled; ReplyMode = mode; ReplyToGroups = replyToGroups; ReplyPrompt = prompt.Trim();
         ModelPriorityJson = JsonSerializer.Serialize(ids); UpdatedAt = DateTimeOffset.UtcNow;
     }

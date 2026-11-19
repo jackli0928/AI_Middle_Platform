@@ -75,6 +75,15 @@ var robots = testScope.ServiceProvider.GetRequiredService<IRobotService>();
 var oldSecret = robotEntity.ProtectedSecret;
 await robots.SaveAsync(new RobotInput { Id = robotEntity.Id, Name = "已编辑", BotId = "test-bot", Secret = null }, default);
 Check(robotEntity.ProtectedSecret == oldSecret, "编辑 Secret 留空保留原有凭据");
+var quoteEdit = await client.PostAsync("/Robots/Edit", new FormUrlEncodedContent(new Dictionary<string,string> {
+    ["Id"] = robotEntity.Id.ToString(), ["Name"] = "已编辑", ["BotId"] = "test-bot", ["Enabled"] = "true",
+    ["AutoReplyEnabled"] = "true", ["ReplyMode"] = "quote", ["__RequestVerificationToken"] = Token(editExisting)
+}));
+Check(quoteEdit.StatusCode == HttpStatusCode.Redirect && robotEntity.ReplyMode == "quote"
+    && robotEntity.AutoReplyEnabled && robotEntity.GetModelPriority().Count == 0,
+    "MVC 可保存无 AI 模型的报价 MCP 模式");
+Check(WebUtility.HtmlDecode(await client.GetStringAsync("/Robots/Edit/" + robotEntity.Id)).Contains("报价 MCP（无需模型）"),
+    "报价配置页显示无需模型的 MCP 选项");
 await Reject(() => robots.SaveAsync(new RobotInput { Name = "重复", BotId = "test-bot", Secret = "test" }, default), "拒绝重复 Bot ID");
 await Reject(() => robots.SaveAsync(new RobotInput { Name = "缺少凭据", BotId = "missing" }, default), "新建机器人必须提供 Secret");
 foreach (var target in new[] { "@all", "a|b", "a,b", "a;b", "a b", "a，b" })
