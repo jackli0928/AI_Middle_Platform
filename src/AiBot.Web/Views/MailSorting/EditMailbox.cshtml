@@ -1,0 +1,33 @@
+@using AiBot.Application
+@model MailboxSettings
+@{ ViewData["Title"] = Model.Id is null ? "新增收件邮箱" : "编辑收件邮箱"; }
+<div class="page-heading">
+    <div><h1>@ViewData["Title"]</h1><p>支持 TLS 加密的 IMAP 和 POP3。</p></div>
+    <a class="button secondary" asp-action="Mailboxes">返回收件邮箱</a>
+</div>
+<section class="panel mail-panel">
+    <form class="mail-body" asp-action="EditMailbox" method="post">
+        <input asp-for="Id" type="hidden" />
+        <div asp-validation-summary="All" class="validation-summary"></div>
+        <div class="mail-fields">
+            <div class="field"><label asp-for="Name">显示名称</label><input asp-for="Name" required maxlength="100" /></div>
+            <div class="field"><label asp-for="Protocol">收件协议</label><select asp-for="Protocol"><option value="imap">IMAP</option><option value="pop3">POP3</option></select></div>
+            <div class="field"><label asp-for="Host">服务器</label><input asp-for="Host" required maxlength="253" placeholder="imap.example.com" /></div>
+            <div class="field"><label asp-for="Port">TLS 端口</label><input asp-for="Port" min="0" max="65535" /><small>0 使用默认端口，IMAP 993，POP3 995。</small></div>
+            <div class="field"><label asp-for="Username">登录账号</label><input asp-for="Username" required maxlength="320" /></div>
+            <div class="field"><label asp-for="Address">收件地址</label><input asp-for="Address" type="email" maxlength="320" /><small>用于收件地址分类，可与登录账号不同。</small></div>
+            <div class="field"><label for="mailbox-access-token">邮箱授权码</label><input id="mailbox-access-token" name="Password" type="password" autocomplete="new-password" maxlength="4096" /><small>编辑时留空保留当前账号的授权码。</small></div>
+            <div class="field"><label asp-for="Folder">IMAP 文件夹</label><input asp-for="Folder" maxlength="256" /><small>POP3 忽略此项。</small></div>
+            <div class="field"><label asp-for="Category">默认分类</label><select asp-for="Category">
+                <option value="">按邮件内容自动识别</option>
+                @foreach (var category in MailSorting.Categories.Where(x => x.Key != "review"))
+                { <option value="@category.Key">@category.Value</option> }
+            </select></div>
+            <div class="field"><label asp-for="ImportRecent">首次收件</label>
+                <select asp-for="ImportRecent"><option value="true">同步最近 20 封</option><option value="false">仅处理新邮件</option></select></div>
+            <div class="field"><label asp-for="Enabled">自动收件</label>
+                <select asp-for="Enabled"><option value="true">启用</option><option value="false">停用</option></select></div>
+        </div>
+        <div class="mail-actions"><button type="submit" class="button primary">保存邮箱</button></div>
+    </form>
+</section>

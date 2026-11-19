@@ -1,5 +1,5 @@
 @model Dashboard
-@{ ViewData["Title"] = "控制台概览"; }
+@{ ViewData["Title"] = "控制台概览"; ViewData["Module"] = "AI 机器人"; }
 <div class="page-heading"><div><div class="eyebrow">OVERVIEW</div><h1>控制台概览<span class="heading-dot">.</span></h1><p>集中管理你的机器人，让每一次消息都有迹可循。</p></div><a class="button primary" asp-controller="Robots" asp-action="Edit"><svg><use href="#i-plus"/></svg>添加机器人</a></div>
 <section class="welcome-banner"><div class="banner-copy"><span class="banner-label"><span class="tiny-dot"></span> YOUR AI WORKSPACE</span><h2>让每一次连接，<br/>都更高效。</h2><p>从机器人配置到消息触达，在一个工作台完成。</p><a asp-controller="Robots" asp-action="Index">管理企微机器人<svg><use href="#i-arrow"/></svg></a></div><div class="banner-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><span class="art-node node-one"><svg><use href="#i-send"/></svg></span><span class="art-node node-two"><svg><use href="#i-check"/></svg></span><div class="art-bot"><svg><use href="#i-bot"/></svg></div><span class="art-caption">CONNECTED POSSIBILITIES</span></div></section>
 <div class="stat-grid">

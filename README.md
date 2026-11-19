@@ -1,6 +1,6 @@
-# Li · AI 机器人中控管理系统
+# Li · AI 中台
 
-基于 **.NET 10 / ASP.NET Core MVC / PostgreSQL / EF Core** 的中文机器人管理后台，采用 DDD 与清洁架构。数据库为 `li`，业务 schema 为 `ai_bot`。前端为服务端 Razor MVC，使用本地 CSS、JavaScript 和 SVG 图标，无需 Node.js、前端构建或外部 CDN。
+基于 **.NET 10 / ASP.NET Core MVC / PostgreSQL / EF Core** 的中文 AI 管理后台，采用 DDD 与清洁架构。数据库为 `li`，业务 schema 为 `ai_bot`。前端为服务端 Razor MVC，使用本地 CSS、JavaScript 和 SVG 图标，无需 Node.js、前端构建或外部 CDN。
 
 ## 本地启动
 
@@ -72,6 +72,56 @@ BootstrapAdmin__Password=你的管理员初始密码
 仅处理新入库的回调，不补发历史消息。每条接收记录由数据库唯一约束占用一次自动回复资格；生成完成后再次检查机器人是否仍启用。回复通过现有长连接的主动发送协议发到原 User ID／Chat ID，最终文本限制为 4096 UTF-8 字节。结果未知或进程中断不会自动重发，记录可能保留为生成中／待核实，应先检查企微会话。自动回复记录可在接收消息详情查看，已发出的回复同时进入“消息记录”。
 
 数据库升级脚本为 `docs/005_add_auto_reply.sql`；应用启动自动执行同一迁移，已有机器人默认关闭自动回复。真实模型联调需自行填入可用接口及密钥；自动检查使用模拟 HTTP 和模拟企微连接。
+
+## AI 邮件自动分拣
+
+中台侧栏按 AI 邮件自动分拣、AI 机器人、AI 知识库、系统配置和账号管理五个模块组织。控制台概览位于 AI 机器人模块。邮件分拣随 .NET 中台部署，使用 PostgreSQL 和现有登录、写操作防伪及 Data Protection 密钥环。
+
+- 「分拣待办」支持导入单封 12 MB 以内的 .eml，并按主题、发件人、分类和复核状态筛选。自动收件和手工导入按 Message-ID 去重，缺失时按原文摘要去重。
+- 结合主题、正文、可解析附件及已收往来邮件识别空运订舱业务，保存候选字段和原文证据；多个候选值进入人工核对。保存或确认时记录操作人，重新识别保留已保存的人工值。
+- 支持下载 .eml 和附件，以及 TXT、CSV、TSV、XLS、XLSX、DOCX 和文本型 PDF 的文本预览。附件损坏、扫描件或仅图片附件请下载原件复核。当前预览为提取文本。
+- 订单建单、更新、业务发信和报表转发未接入。历史 SQLite 数据不会自动导入。如需迁移人工修订与待办状态，切换前应建立独立迁移和核对方案。
+
+### 试点收件配置
+
+登录后打开「AI 邮件自动分拣 → 收件邮箱 → 新增邮箱」，填写协议、服务器、账号与邮箱授权码，保存后在下一轮收件生效。编辑邮箱可以停用监听，授权码留空会保留同一账号的原授权码。
+
+仍可通过部署配置定义托管邮箱。页面新增同一账号后，其设置将优先于部署配置。示例邮箱默认停用。
+
+```json
+"MailSorting": {
+  "PollSeconds": 60,
+  "VolumeDivisor": 6000,
+  "OllamaModel": "",
+  "Routes": {
+    "booking@example.com": "request"
+  },
+  "Mailboxes": [
+    {
+      "Enabled": false,
+      "Name": "空运出口",
+      "Protocol": "imap",
+      "Host": "imap.example.com",
+      "Port": 993,
+      "Username": "sorting@example.com",
+      "Folder": "INBOX",
+      "Category": "",
+      "ImportRecent": false
+    }
+  ]
+}
+```
+
+1. 配置 IMAP 或 POP3 账号后重启中台。在「收件邮箱」保存邮箱专用授权码，授权码加密入库，备份数据库时一并保留中台密钥环。
+2. 设定 `ImportRecent`。首次选 `false` 时建立检查点后仅处理新邮件，选 `true` 时拉取最近 20 封。默认 TLS 端口 IMAP 993、POP3 995。IMAP 只读打开，POP3 服务必须支持 UIDL。
+3. 用独立测试邮箱试点。生产切换时完成数据库和密钥环备份，先停止旧工作台对试点邮箱的轮询，再启用中台收件。核对切换窗口的来信、去重结果和待办；发现差异时停用中台该邮箱再恢复旧轮询。轮询失败会在应用日志中记录异常类型并于下一轮重试。
+4. 需要模型时可配置已部署在同机的 Ollama 模型。模型只收到限长的主题、正文和附件提取文本。建议字段必须能回溯到原文，调用失败继续使用规则识别。模型选项默认关闭。
+
+### 使用原工作台识别规则
+
+如需复用原工作台的订舱模板、附件提取和勾选识别，在 MailSorting 中配置 PythonExecutable 和 PythonParserDirectory，均使用绝对路径。前者指向已安装原项目 requirements.txt 的 Python 解释器，后者指向受部署管理员维护、包含 intake.py、booking.py 等解析模块的原项目目录。两个路径均配置后，中台从标准输入传递原始邮件，调用解析器并读取识别结果。邮箱协议、待办、凭据及复核由中台管理。解析进程失败时回退到 .NET。历史待办可在详情页点「重新识别」。
+
+原工作台的规则可以作为 JSON 快照保存在应用的 App_Data 下，并在 MailSorting:RulesSnapshot 中设置相对或绝对路径。快照包括 version、keywords、defaults、volume_divisor、routes 和 customer_rules。首次进入「邮件识别规则」时以导入快照预填表单。页面可编辑分类关键词、流程默认值、体积重除数、收件地址路由和客户映射。首次保存后，以 PostgreSQL 中的配置为准，之后的新邮件和重新识别即时读取已保存规则。备份时应保留 PostgreSQL 数据及用于初始预填的快照和配置引用。
 
 ## 架构
 

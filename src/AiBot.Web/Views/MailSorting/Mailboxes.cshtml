@@ -1,0 +1,37 @@
+@using AiBot.Web.Controllers
+@model MailSortingMailboxes
+@{ ViewData["Title"] = "收件邮箱"; }
+<div class="page-heading">
+    <div><h1>收件邮箱</h1><p>启用的邮箱由后台通过 IMAP 或 POP3 定期收件。</p></div>
+    <a class="button secondary" asp-action="Index">分拣待办</a>
+</div>
+<section class="panel mail-panel">
+    <div class="panel-heading"><h2>监测邮箱</h2><a class="button primary" asp-action="EditMailbox">新增邮箱</a></div>
+    @if (Model.Managed.Count == 0 && Model.Deployment.Count == 0)
+    {
+        <p class="mail-empty">暂无收件邮箱。新增邮箱并保存授权码后即可开启自动收件。</p>
+    }
+    @foreach (var account in Model.Managed)
+    {
+        <div class="mail-toolbar">
+            <div class="mail-account"><strong>@account.Name</strong>
+                <span>@account.Protocol.ToUpperInvariant() · @account.Username · @account.Host</span>
+                <span>@(account.Enabled ? "已启用" : "已停用") · @(account.HasPassword ? "已保存授权码" : "待设置授权码")</span>
+            </div>
+            <a class="button secondary" asp-action="EditMailbox" asp-route-id="@account.Id">编辑邮箱</a>
+        </div>
+    }
+    @foreach (var account in Model.Deployment)
+    {
+        <form class="mail-toolbar" asp-action="SaveMailboxPassword" method="post">
+            <input type="hidden" name="mailbox" value="@account.Index" />
+            <div class="mail-account"><strong>@(string.IsNullOrWhiteSpace(account.Name) ? account.Username : account.Name)</strong>
+                <span>@account.Protocol.ToUpperInvariant() · @account.Username · @account.Host</span>
+                <span>部署配置 · @(account.Enabled ? "已启用" : "已停用") · @(account.HasPassword ? "已保存授权码" : "待设置授权码")</span>
+            </div>
+            <div class="field"><label for="mail-password-@account.Index">邮箱授权码</label>
+            <input id="mail-password-@account.Index" name="password" type="password" autocomplete="new-password" maxlength="4096" required /></div>
+            <button class="button secondary" type="submit">保存授权码</button>
+        </form>
+    }
+</section>

@@ -1,32 +1,40 @@
 @{ var controller = ViewContext.RouteData.Values["controller"]?.ToString(); var action = ViewContext.RouteData.Values["action"]?.ToString(); }
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>@ViewData["Title"] · Li 机器人中控</title><link rel="icon" href="~/favicon.svg" type="image/svg+xml"/><link rel="stylesheet" href="~/css/site.css" asp-append-version="true"/><link rel="stylesheet" href="~/css/message-details.css" asp-append-version="true"/></head>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>@ViewData["Title"] · Li AI 中台</title><link rel="icon" href="~/favicon.svg" type="image/svg+xml"/><link rel="stylesheet" href="~/css/site.css" asp-append-version="true"/><link rel="stylesheet" href="~/css/message-details.css" asp-append-version="true"/></head>
 <body>
 <partial name="_Icons"/>
 <aside class="sidebar" id="sidebar">
- <a class="brand" asp-controller="Home" asp-action="Index"><span class="brand-mark"><svg><use href="#i-bot"/></svg></span><span>Li<span class="brand-dot">.</span> <b>机器人中控</b><small>AI BOT CONTROL CENTER</small></span></a>
- <div class="workspace"><span class="workspace-avatar">Li</span><div>工作空间<small>AI 机器人管理系统</small></div><span class="workspace-dot"></span></div>
- <div class="nav-label">工作台 / WORKSPACE</div>
- <nav aria-label="主菜单">
+ <a class="brand" asp-controller="Home" asp-action="Index"><span class="brand-mark"><svg><use href="#i-bot"/></svg></span><span>Li<span class="brand-dot">.</span> <b>AI 中台</b><small>AI BOT CONTROL CENTER</small></span></a>
+ <div class="workspace"><span class="workspace-avatar">Li</span><div>工作空间<small>AI 中台</small></div><span class="workspace-dot"></span></div>
+ <nav class="module-navigation" aria-label="主菜单">
+  <div class="nav-label">AI 邮件自动分拣</div>
+  <a class="nav-item @(controller == "MailSorting" && action is not ("Mailboxes" or "EditMailbox" or "Rules") ? "active" : "")" asp-controller="MailSorting" asp-action="Index"><svg><use href="#i-list"/></svg>分拣待办</a>
+  <a class="nav-item @(controller == "MailSorting" && action is "Mailboxes" or "EditMailbox" ? "active" : "")" asp-controller="MailSorting" asp-action="Mailboxes"><svg><use href="#i-key"/></svg>收件邮箱</a>
+  <a class="nav-item @(controller == "MailSorting" && action == "Rules" ? "active" : "")" asp-controller="MailSorting" asp-action="Rules"><svg><use href="#i-list"/></svg>邮件识别规则</a>
+  <div class="nav-label">AI 机器人</div>
   <a class="nav-item @(controller == "Home" ? "active" : "")" asp-controller="Home" asp-action="Index"><svg><use href="#i-grid"/></svg>控制台概览</a>
-  <a class="nav-item @(controller == "Robots" && action != "Send" ? "active" : "")" asp-controller="Robots" asp-action="Index"><svg><use href="#i-bot"/></svg>企微机器人<span class="nav-mini">WECOM</span></a>
-  <a class="nav-item @(action == "Send" ? "active" : "")" asp-controller="Robots" asp-action="Send"><svg><use href="#i-send"/></svg>发送消息</a>
-  <a class="nav-item @(controller == "Messages" ? "active" : "")" asp-controller="Messages" asp-action="Index"><svg><use href="#i-list"/></svg>消息记录</a>
+  <a class="nav-item @(controller == "Robots" && action != "Send" ? "active" : "")" asp-controller="Robots" asp-action="Index"><svg><use href="#i-bot"/></svg>企微机器人</a>
+  <a class="nav-item @(controller == "Robots" && action == "Send" ? "active" : "")" asp-controller="Robots" asp-action="Send"><svg><use href="#i-send"/></svg>发送消息</a>
   <a class="nav-item @(controller == "Inbox" ? "active" : "")" asp-controller="Inbox" asp-action="Index"><svg><use href="#i-list"/></svg>接收消息</a>
+  <a class="nav-item @(controller == "Messages" ? "active" : "")" asp-controller="Messages" asp-action="Index"><svg><use href="#i-list"/></svg>消息记录</a>
+  <div class="nav-label">AI 知识库</div>
   <a class="nav-item @(controller == "Knowledge" ? "active" : "")" asp-controller="Knowledge" asp-action="Index"><svg><use href="#i-list"/></svg>知识库问答</a>
+  <div class="nav-label">系统配置</div>
   <a class="nav-item @(controller == "AiModels" ? "active" : "")" asp-controller="AiModels" asp-action="Index"><svg><use href="#i-bot"/></svg>AI 模型接口</a>
+  <div class="nav-label">账号管理</div>
+  <a class="nav-item @(controller == "Account" ? "active" : "")" asp-controller="Account" asp-action="Password"><svg><use href="#i-key"/></svg>账号安全</a>
  </nav>
- <div class="sidebar-bottom"><div class="secure-note"><svg><use href="#i-shield"/></svg><div>连接协作，简单有序<small>凭据加密保护 · 消息回执追踪</small></div></div><a class="nav-item @(controller == "Account" ? "active" : "")" asp-controller="Account" asp-action="Password"><svg><use href="#i-key"/></svg>账号安全</a><div class="sidebar-version"><span class="tiny-dot"></span> Li Bot Center <span>v1.0</span></div></div>
 </aside>
 <div class="app-main">
- <header class="topbar"><div class="breadcrumbs"><button class="icon-button mobile-menu" aria-label="切换菜单" aria-expanded="false" aria-controls="sidebar"><svg><use href="#i-menu"/></svg></button><span>工作空间</span><span class="slash">/</span><strong>@ViewData["Title"]</strong></div><div class="topbar-right"><span class="environment">企业协作控制台</span><span class="topbar-divider"></span><span class="avatar">@(User.Identity?.Name?.FirstOrDefault().ToString().ToUpperInvariant() ?? "A")</span><span class="username">@User.Identity?.Name<small>管理员</small></span><form asp-controller="Account" asp-action="Logout" method="post"><button class="icon-button" title="退出登录" aria-label="退出登录"><svg><use href="#i-logout"/></svg></button></form></div></header>
+ <header class="topbar"><div class="breadcrumbs"><button class="icon-button mobile-menu" aria-label="切换菜单" aria-expanded="false" aria-controls="sidebar"><svg><use href="#i-menu"/></svg></button><span>@(ViewData["Module"] ?? "工作空间")</span><span class="slash">/</span><strong>@ViewData["Title"]</strong></div><div class="topbar-right"><span class="environment">企业协作控制台</span><span class="topbar-divider"></span><span class="avatar">@(User.Identity?.Name?.FirstOrDefault().ToString().ToUpperInvariant() ?? "A")</span><span class="username">@User.Identity?.Name<small>管理员</small></span><form asp-controller="Account" asp-action="Logout" method="post"><button class="icon-button" title="退出登录" aria-label="退出登录"><svg><use href="#i-logout"/></svg></button></form></div></header>
  <main class="content" id="main-content"><partial name="_Alerts"/>@RenderBody()</main>
  <footer class="footer"><span>Li. AI Bot Control Center</span><span>让连接更简单，让协作更高效。</span></footer>
 </div>
 <dialog id="confirm-dialog"><div class="dialog-icon"><svg><use href="#i-trash"/></svg></div><h2 id="confirm-title">删除这个机器人？</h2><p id="confirm-description"></p><p class="muted" id="confirm-note">此操作会移除配置，历史消息记录仍会保留。</p><div class="dialog-actions"><button class="button secondary" id="confirm-cancel" type="button">取消</button><button class="button danger-button" id="confirm-accept" type="button">确认删除</button></div></dialog>
 <dialog id="message-detail-dialog" class="message-detail-dialog" aria-labelledby="message-detail-title"><header class="message-detail-header"><div><span class="eyebrow">MESSAGE DETAILS</span><h2 id="message-detail-title">消息详情</h2></div><button class="icon-button" type="button" data-close-message-detail aria-label="关闭消息详情" autofocus><svg viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header><div id="message-detail-body" class="message-detail-body"></div><footer class="message-detail-footer"><button class="button secondary" type="button" data-close-message-detail>关闭</button></footer></dialog>
 @if (controller == "Inbox") { <link rel="stylesheet" href="~/css/inbox.css" asp-append-version="true"/><script src="~/js/inbox.js" asp-append-version="true" defer></script> }
+@if (controller == "MailSorting") { <link rel="stylesheet" href="~/css/mail-sorting.css" asp-append-version="true"/> }
 <script src="~/js/site.js" asp-append-version="true" defer></script>
 <link rel="stylesheet" href="~/css/automation.css" asp-append-version="true"/><script src="~/js/automation.js" asp-append-version="true" defer></script>
 </body></html>

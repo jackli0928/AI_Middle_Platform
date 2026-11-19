@@ -33,7 +33,8 @@ internal static class PostgresTests
         try
         {
             await using var db = new BotDbContext(options); await db.Database.MigrateAsync();
-            check((await db.Database.GetAppliedMigrationsAsync()).Count() == 4, "真实 PostgreSQL 空库完整应用全部迁移");
+            check((await db.Database.GetAppliedMigrationsAsync()).Count() == 7, "真实 PostgreSQL 空库完整应用全部迁移");
+            await MailSortingTests.RunPostgresAsync(db, options, check);
             var autoRobot = Robot.Create("自动回复持久化验证", "auto-test", "protected-test", "", false);
             autoRobot.ConfigureAutoReply(false, "ai", false, "测试提示", [Guid.NewGuid(), Guid.NewGuid()]);
             db.Robots.Add(autoRobot); await db.SaveChangesAsync(); db.ChangeTracker.Clear();

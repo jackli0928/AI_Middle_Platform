@@ -1,0 +1,65 @@
+@using AiBot.Application
+@using AiBot.Web.Controllers
+@model MailSortingList
+@{ ViewData["Title"] = "AI 邮件自动分拣"; }
+<div class="page-heading">
+    <div><h1>AI 邮件自动分拣</h1><p>查看收件、核对分拣结果并确认待办。</p></div>
+    <a class="button secondary" asp-action="Mailboxes">收件邮箱</a>
+</div>
+<section class="panel mail-panel">
+    <div class="panel-heading"><h2>分拣待办</h2></div>
+    <form class="mail-toolbar" asp-action="Import" method="post" enctype="multipart/form-data">
+        <div class="field"><label for="mail-file">导入 .eml 邮件（最大 12 MB）</label><input id="mail-file" type="file" name="file" accept=".eml,message/rfc822" required /></div>
+        <button class="button primary" type="submit">导入并识别</button>
+    </form>
+    <form class="mail-toolbar" asp-action="Index" method="get">
+        <div class="field"><label for="mail-search">主题或发件人</label><input id="mail-search" name="search" value="@Model.Search" maxlength="200" /></div>
+        <div class="field"><label for="mail-category">分类</label><select id="mail-category" name="category">
+            <option value="">全部分类</option>
+            @foreach (var entry in MailSorting.Categories)
+            {
+                <option value="@entry.Key" selected="@(Model.Category == entry.Key)">@entry.Value</option>
+            }
+        </select></div>
+        <div class="field"><label for="mail-status">状态</label><select id="mail-status" name="status">
+            <option value="">全部状态</option>
+            <option value="false" selected="@(Model.Status == "false")">待复核</option>
+            <option value="true" selected="@(Model.Status == "true")">已复核</option>
+        </select></div>
+        <button class="button secondary" type="submit">筛选</button>
+    </form>
+    @if (Model.Rows.Count == 0)
+    {
+        <p class="mail-empty">暂无符合条件的邮件。</p>
+    }
+    else
+    {
+        <div class="mail-table-wrap"><table class="mail-table">
+            <thead><tr><th scope="col">主题</th><th scope="col">发件人</th><th scope="col">分类</th><th scope="col">状态</th><th scope="col">来源</th><th scope="col">入库时间</th></tr></thead>
+            <tbody>
+            @foreach (var row in Model.Rows)
+            {
+                <tr>
+                    <td><a asp-action="Details" asp-route-id="@row.Id">@row.Subject</a></td>
+                    <td>@row.Sender</td><td>@MailSorting.Categories[row.Category]</td>
+                    <td>@(row.Confirmed ? "已复核" : "待复核")</td><td>@row.Source</td><td>@Display.Time(row.ReceivedAt)</td>
+                </tr>
+            }
+            </tbody>
+        </table></div>
+    }
+    @if (Model.Page > 1 || Model.HasNext)
+    {
+        <div class="mail-toolbar">
+            @if (Model.Page > 1)
+            {
+                <a class="button secondary" asp-route-search="@Model.Search" asp-route-status="@Model.Status" asp-route-category="@Model.Category" asp-route-page="@(Model.Page - 1)">上一页</a>
+            }
+            <span>第 @Model.Page 页</span>
+            @if (Model.HasNext)
+            {
+                <a class="button secondary" asp-route-search="@Model.Search" asp-route-status="@Model.Status" asp-route-category="@Model.Category" asp-route-page="@(Model.Page + 1)">下一页</a>
+            }
+        </div>
+    }
+</section>

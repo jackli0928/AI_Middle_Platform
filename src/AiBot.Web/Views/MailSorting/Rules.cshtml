@@ -1,0 +1,77 @@
+@using AiBot.Application
+@using AiBot.Web.Models
+@model MailRuleEditor
+@{ ViewData["Title"] = "邮件识别规则"; }
+<div class="page-heading">
+    <div><h1>邮件识别规则</h1><p>当前版本 @ViewData["RuleVersion"]。保存后应用于新邮件以及后续重新识别。</p></div>
+    <a class="button secondary" asp-action="Index">返回待办</a>
+</div>
+<form asp-action="Rules" method="post" class="mail-rules-form">
+    <input asp-for="Revision" type="hidden" />
+    <div asp-validation-summary="All" class="validation-summary" role="alert"></div>
+
+    <section class="panel mail-panel">
+        <div class="panel-heading"><div><h2>分类关键词</h2><p>每行一个关键词。删除某一行可移除该关键词。</p></div></div>
+        <div class="mail-body mail-fields">
+        @foreach (var (key, label) in MailSorting.Categories.Where(x => x.Key != "review"))
+        {
+            <div class="field">
+                <label for="terms-@key">@label</label>
+                <textarea id="terms-@key" name="Keywords[@key]" rows="5" maxlength="3050">@Model.Keywords.GetValueOrDefault(key)</textarea>
+            </div>
+        }
+        </div>
+    </section>
+
+    <section class="panel mail-panel">
+        <div class="panel-heading"><div><h2>流程默认值</h2><p>识别不到相应字段时补入默认值。留空可停用该默认值。</p></div></div>
+        <div class="mail-body mail-fields">
+            <div class="field">
+                <label asp-for="VolumeDivisor">体积重除数</label>
+                <input asp-for="VolumeDivisor" type="number" min="1" max="999999" required />
+            </div>
+            @foreach (var (key, label) in MailRuleEditor.DefaultFields)
+            {
+                var current = Model.Defaults.GetValueOrDefault(key);
+                <div class="field">
+                    <label for="default-@key">@label</label>
+                    @if (key == "tax_exempt")
+                    {
+                        <select id="default-@key" name="Defaults[@key]">
+                            <option value="" selected="@string.IsNullOrEmpty(current)">不设置</option>
+                            @foreach (var item in new[] { "是", "否" })
+                            {
+                                <option value="@item" selected="@(current == item)">@item</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <input id="default-@key" name="Defaults[@key]" value="@current" maxlength="@(key.EndsWith("_currency") ? 3 : 1500)" />
+                    }
+                </div>
+            }
+        </div>
+    </section>
+
+    <section class="panel mail-panel">
+        <div class="panel-heading"><h2>收件地址路由与客户映射</h2></div>
+        <div class="mail-body mail-fields">
+            <div class="field">
+                <label asp-for="Routes">收件地址路由</label>
+                <textarea asp-for="Routes" rows="7" maxlength="100000" aria-describedby="routes-help"></textarea>
+                <small id="routes-help">每行填写一个「收件地址 = 分类」。例如 booking&#64;example.com = 订舱申请。分类也可以填「按内容识别」。收件邮箱的固定分类优先。</small>
+            </div>
+            <div class="field">
+                <label asp-for="Customers">客户映射</label>
+                <textarea asp-for="Customers" rows="7" maxlength="152000" aria-describedby="customers-help"></textarea>
+                <small id="customers-help">每行填写一个「邮箱、域名或别名 = 客户全称」。例如 &#64;example.com = 示例客户。</small>
+            </div>
+        </div>
+    </section>
+
+    <div class="mail-actions mail-rule-actions">
+        <button type="submit" class="button primary">保存规则</button>
+        <a class="button secondary" asp-action="Rules">重新载入已保存规则</a>
+    </div>
+</form>

@@ -9,7 +9,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-var builder = WebApplication.CreateBuilder(args);
+var importMailboxConfiguration = args is ["--import-mailbox-config"];
+var builder = WebApplication.CreateBuilder(importMailboxConfiguration ? [] : args);
 builder.Logging.ClearProviders();
 builder.Logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false).AddEnvironmentVariables();
@@ -33,6 +34,17 @@ builder.Services.AddSingleton<IConnectionMonitor>(sp => sp.GetRequiredService<We
 builder.Services.AddSingleton<DatabaseState>();
 builder.Services.AddHostedService<DatabaseStartup>();
 builder.Services.AddHostedService<WeComBackgroundWorker>();
+builder.Services.Configure<MailSortingOptions>(builder.Configuration.GetSection("MailSorting"));
+builder.Services.AddScoped<IMailSorting, PostgresMailSorting>();
+builder.Services.AddScoped<IMailboxCredentials, PostgresMailboxCredentials>();
+builder.Services.AddScoped<IMailboxSettings, PostgresMailboxSettings>();
+builder.Services.AddSingleton<MailboxPoller>();
+builder.Services.AddSingleton<LegacyMailRuleSource>();
+builder.Services.AddScoped<IMailRuleSettings, PostgresMailRuleSettings>();
+builder.Services.AddSingleton<LegacyMailAnalyzer>();
+builder.Services.AddHttpClient<MailModelSuggestions>().ConfigurePrimaryHttpMessageHandler(
+    () => new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false });
+builder.Services.AddHostedService<MailSortingWorker>();
 var protection = builder.Services.AddDataProtection().SetApplicationName("Li.AiBot").PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys")));
 if (OperatingSystem.IsWindows()) protection.ProtectKeysWithDpapi();
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(o => {
@@ -51,6 +63,12 @@ builder.Services.AddRateLimiter(o => {
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.GetCultureInfo("zh-CN");
 CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.GetCultureInfo("zh-CN");
 var app = builder.Build();
+if (importMailboxConfiguration)
+{
+    await using var importing = app;
+    await MailboxConfigurationImport.RunAsync(app.Services);
+    return;
+}
 app.UseExceptionHandler("/Home/Error");
 if (!app.Environment.IsDevelopment()) { app.UseHsts(); app.UseHttpsRedirection(); }
 app.Use(async (context, next) => {

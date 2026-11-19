@@ -27,6 +27,7 @@ public sealed class TestApp : WebApplicationFactory<global::Program>
         builder.ConfigureServices(services => {
             var startup = services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(DatabaseStartup));
             services.Remove(startup);
+            services.Remove(services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(MailSortingWorker)));
             services.Remove(services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(AiBot.Infrastructure.WeComBackgroundWorker)));
             foreach (var warmup in services.Where(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType?.Name == "DataProtectionHostedService").ToList()) services.Remove(warmup);
             services.RemoveAll<IRobotRepository>(); services.AddSingleton<IRobotRepository>(Repository);
