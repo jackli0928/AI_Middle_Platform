@@ -28,6 +28,7 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
     private readonly ConcurrentDictionary<Guid, RobotConnectionState> states = new();
     private readonly ConcurrentDictionary<Guid, byte> restarts = new();
     public IReadOnlyList<RobotConnectionState> GetStates() => states.Values.OrderBy(x => x.RobotName).ToList();
+    public bool HasSession(string botId) => workers.Values.Any(x => x.Robot.BotId == botId && Volatile.Read(ref x.Session) is not null);
     public void Reconnect(Guid robotId) => restarts[robotId] = 0;
     public Task<SendResult> SendAsync(string botId, string secret, string targetType, string targetId, string content, CancellationToken ct)
     {

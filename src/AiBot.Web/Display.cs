@@ -4,7 +4,7 @@ namespace AiBot.Web;
 
 public static class Display
 {
-    public static string AutoReplyStatus(string status) => status switch { "accepted" => "企微已接受", "failed" => "回复失败", "unknown" => "结果未确认", "skipped" => "未发送", _ => "处理中／未完成" };
+    public static string AutoReplyStatus(string status) => status switch { "accepted" => "企微已接受", "failed" => "回复失败", "unknown" => "结果未确认", "skipped" => "未发送", "queued" => "排队中", _ => "处理中／未完成" };
     public static string MessageType(string type) => type switch { "text" => "文本", "image" => "图片", "mixed" => "图文", "voice" => "语音", "file" => "文件", "video" => "视频", _ => "其他" };
     public static string Connection(string state) => state switch { "online" => "已连接", "connecting" => "连接中", "authenticating" => "认证中", "reconnecting" => "重连中", "disabled" => "已停用", "standby" => "其他实例连接中", "conflict" => "连接被接管", _ => "配置异常" };
     public static string ConnectionTone(string state) => state == "online" ? "success" : state is "error" or "conflict" ? "danger" : state == "disabled" ? "neutral" : "warning";

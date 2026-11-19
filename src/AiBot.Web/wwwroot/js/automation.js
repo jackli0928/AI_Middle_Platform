@@ -5,7 +5,9 @@ function updateReplySettings() {
     if (!replyEnabled) return;
     document.querySelector('#auto-reply-options').hidden = !replyEnabled.checked;
     document.querySelector('#knowledge-reply-help').hidden = replyMode.value !== 'knowledge';
-    document.querySelector('#ai-reply-options').hidden = replyMode.value !== 'ai';
+    document.querySelector('#ai-reply-options').hidden = !['ai', 'quote'].includes(replyMode.value);
+    document.querySelector('#quote-reply-help').hidden = replyMode.value !== 'quote';
+    document.querySelector('#group-reply-setting').hidden = replyMode.value === 'quote';
 }
 replyEnabled?.addEventListener('change', updateReplySettings); replyMode?.addEventListener('change', updateReplySettings); updateReplySettings();
 const priorities = document.querySelector('#model-priority-list');

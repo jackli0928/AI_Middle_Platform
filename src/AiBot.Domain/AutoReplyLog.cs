@@ -15,6 +15,7 @@ public sealed class AutoReplyLog
     public DateTimeOffset? CompletedAt { get; private set; }
     private AutoReplyLog() { }
     public AutoReplyLog(Guid receivedMessageId, Guid robotId, string mode) { ReceivedMessageId = receivedMessageId; RobotId = robotId; Mode = mode; }
+    public void Queue() { Status = "queued"; Result = "报价任务排队中。"; }
     public void Complete(string status, string modelName, string replyContent, string result, string attempts)
     { Status = status; ModelName = modelName; ReplyContent = replyContent; Result = result; Attempts = attempts; CompletedAt = DateTimeOffset.UtcNow; }
 }

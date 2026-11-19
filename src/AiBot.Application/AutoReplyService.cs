@@ -14,6 +14,13 @@ public sealed class AutoReplyService(IAutomationRepository repository, IRobotRep
         var target = message.ChatType == "group" ? message.ChatId : message.SenderUserId;
         if (target.Length is 0 or > 256 || target == "@all" || target.Any(c => char.IsWhiteSpace(c) || c is '|' or ',' or ';')) return;
         var log = new AutoReplyLog(message.Id, robot.Id, robot.ReplyMode);
+        if (robot.ReplyMode == "quote")
+        {
+            if (message.ChatType != "single" || message.MessageType != "text") return;
+            log.Queue();
+            await repository.ClaimAsync(log, ct);
+            return;
+        }
         if (!await repository.ClaimAsync(log, ct)) return;
         var attempts = new List<string>(); var modelName = ""; var answer = ""; var submitted = false;
         MessageLog? outgoing = null;

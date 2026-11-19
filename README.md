@@ -73,6 +73,14 @@ BootstrapAdmin__Password=你的管理员初始密码
 
 数据库升级脚本为 `docs/005_add_auto_reply.sql`；应用启动自动执行同一迁移，已有机器人默认关闭自动回复。真实模型联调需自行填入可用接口及密钥；自动检查使用模拟 HTTP 和模拟企微连接。
 
+## AI 报价试点
+
+机器人编辑页可以选择「AI 报价」并选择一个已启用的字段提取模型。报价模式目前接收业务员的企微单聊文字。中台保存收到的消息和报价任务，后台最多并行处理 4 条，不占用企微接收循环。同一业务员的任务按顺序处理。回复沿用现有企微长连接、消息记录和回执。报价任务状态在接收消息详情中查看。
+
+试点使用 `D:/WorkBuddy_Mcp/server.mjs` 时，在 `appsettings.Local.json` 的 `QuoteMcp` 节点设置 `Transport` 为 `stdio`、`ScriptPath` 为实际绝对路径、`ToolName` 为 `get_air_quote`，并通过 `QuoteMcp__Token` 环境变量提供报价接口的 plKey。部署服务账号需能执行 Node.js 并读取脚本。本地的 WorkBuddy 连接器使用同一 stdio 服务。正式部署时可以将 MCP 服务改为远程地址，设置 `Transport` 为 `http`、`Url` 为 MCP 接口 URL，其余机器人和报价流程无需改动。`QuoteMcp` 未配置时后台不会领取报价任务。
+
+模型只提取本次询价中的已明确字段。目的地、件数、总毛重或总体积缺失时，机器人要求发送一条完整询价。条件齐全时调用 `get_air_quote`，传入原文 `all_content`；只有工具返回 `quoted` 的 `customerReply` 或 `no_quotes` 才回复。其他结果记为失败，不发送价格。当前试点按每条消息建立独立询价任务，补充信息需在下一条消息中发送完整询价。生产切换前需按实际 MCP 认证、网络和并发容量联调，并使用单独的 Bot ID 验证。
+
 ## AI 邮件自动分拣
 
 中台侧栏按 AI 邮件自动分拣、AI 机器人、AI 知识库、系统配置和账号管理五个模块组织。控制台概览位于 AI 机器人模块。邮件分拣随 .NET 中台部署，使用 PostgreSQL 和现有登录、写操作防伪及 Data Protection 密钥环。

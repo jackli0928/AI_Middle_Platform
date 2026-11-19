@@ -22,12 +22,27 @@ public sealed class InboxRepository(BotDbContext db) : IInboxRepository
     public async Task<bool> InsertIfNewAsync(ReceivedMessage m, CancellationToken ct)
     {
         // The database unique index handles retries and concurrent duplicate callbacks atomically.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var count = await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO ai_bot.received_messages
             ("Id", "RobotId", "RobotName", "MessageId", "RequestId", "SenderUserId", "ChatId", "ChatType", "MessageType", "Content", "PayloadJson", "SentAt", "ReceivedAt")
             VALUES ({m.Id}, {m.RobotId}, {m.RobotName}, {m.MessageId}, {m.RequestId}, {m.SenderUserId}, {m.ChatId}, {m.ChatType}, {m.MessageType}, {m.Content}, {m.PayloadJson}, {m.SentAt}, {m.ReceivedAt})
             ON CONFLICT ("RobotId", "MessageId") DO NOTHING
             """, ct);
+        if (count == 1 && m.ChatType == "single" && m.MessageType == "text")
+        {
+            var logId = Guid.NewGuid();
+            var now = DateTimeOffset.UtcNow;
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO ai_bot.auto_reply_logs
+                ("Id", "ReceivedMessageId", "RobotId", "Mode", "Status", "ModelName", "ReplyContent", "Result", "Attempts", "CreatedAt", "CompletedAt")
+                SELECT {logId}, {m.Id}, {m.RobotId}, 'quote', 'queued', '', '', '报价任务排队中。', '', {now}, NULL
+                FROM ai_bot.robots r
+                WHERE r."Id" = {m.RobotId} AND r."Enabled" AND r."AutoReplyEnabled" AND r."ReplyMode" = 'quote'
+                ON CONFLICT ("ReceivedMessageId") DO NOTHING
+                """, ct);
+        }
+        await transaction.CommitAsync(ct);
         return count == 1;
     }
 }

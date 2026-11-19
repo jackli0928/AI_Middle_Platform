@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using AiBot.Application;
 using AiBot.Domain;
 using AiBot.Infrastructure;
+using AiBot.Web;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
@@ -34,6 +35,8 @@ builder.Services.AddSingleton<IConnectionMonitor>(sp => sp.GetRequiredService<We
 builder.Services.AddSingleton<DatabaseState>();
 builder.Services.AddHostedService<DatabaseStartup>();
 builder.Services.AddHostedService<WeComBackgroundWorker>();
+builder.Services.AddHttpClient<QuoteMcpClient>().ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+builder.Services.AddHostedService<QuoteWorker>();
 builder.Services.Configure<MailSortingOptions>(builder.Configuration.GetSection("MailSorting"));
 builder.Services.AddScoped<IMailSorting, PostgresMailSorting>();
 builder.Services.AddScoped<IMailboxCredentials, PostgresMailboxCredentials>();

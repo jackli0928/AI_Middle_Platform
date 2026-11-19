@@ -5,6 +5,7 @@ using AiBot.Application;
 using AiBot.Domain;
 using AiBot.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Configuration;
 
 namespace AiBot.Tests;
 
@@ -46,6 +47,13 @@ internal static class AutomationTests
         robot.ConfigureAutoReply(true, "ai", true, "", [a.Id]); ai.Generate = _ => "模拟回答"; gateway.Result = new(false, "send-unknown", "模拟回执超时");
         var uncertain = Message(); await Handle(uncertain); await Handle(uncertain);
         check(gateway.Calls == before + 1 && repository.Replies.Last().Status == "unknown", "发送回执未知时记录状态并阻止重试");
+        robot.ConfigureAutoReply(true, "quote", false, "", [a.Id]);
+        before = gateway.Calls;
+        var quoteMessage = Message(text: "上海到洛杉矶，10 件，200 kg，2 m³");
+        await Handle(quoteMessage); await Handle(quoteMessage);
+        await Handle(Message("group")); await Handle(Message(type: "voice"));
+        check(gateway.Calls == before && repository.Replies.Count(x => x.ReceivedMessageId == quoteMessage.Id) == 1
+            && repository.Replies.Last(x => x.ReceivedMessageId == quoteMessage.Id).Status == "queued", "报价单聊只登记一次后台任务，不阻塞接收或直接发送");
         var longText = AutoReplyService.LimitUtf8(string.Concat(Enumerable.Repeat("中文😀", 1000)), 4096);
         check(Encoding.UTF8.GetByteCount(longText) <= 4096 && !longText.Contains('\uFFFD'), "AI 超长回复按 UTF-8 截断且不损坏 Unicode 字符");
 
@@ -63,11 +71,44 @@ internal static class AutomationTests
         handler.Code = HttpStatusCode.OK; handler.Body = "{\"status\":\"incomplete\",\"output\":[]}";
         try { await client.CompleteAsync(a, "", "", default); check(false, "未完成生成应抛出"); }
         catch (AiCompletionException) { check(true, "模型未完成生成时允许切换下一模型"); }
+
+        var quoteConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        { ["QuoteMcp:Transport"] = "http", ["QuoteMcp:Url"] = "https://quote.example.invalid/mcp", ["QuoteMcp:ToolName"] = "get_air_quote" }).Build();
+        var quoteHandler = new QuoteHandler();
+        using var quoteHttp = new HttpClient(quoteHandler);
+        var quoteClient = new QuoteMcpClient(quoteHttp, quoteConfig);
+        using var quoteArgs = JsonDocument.Parse("{\"destination\":\"LAX\",\"piece\":10,\"gross_weight\":200,\"volume\":2,\"all_content\":\"10件200kg2方到LAX\"}");
+        check(await quoteClient.QuoteAsync(quoteArgs.RootElement, default) == "测试报价 12 CNY/KG"
+            && quoteHandler.Tool == "get_air_quote" && quoteHandler.Arguments.GetProperty("piece").GetInt32() == 10,
+            "报价 MCP 使用真实工具名和结构化入参，只接受报价正文");
     }
     private sealed class ModelHandler : HttpMessageHandler
     {
         public string Body = "{}"; public string Request = ""; public HttpStatusCode Code = HttpStatusCode.OK;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         { Request = await request.Content!.ReadAsStringAsync(ct); return new(Code) { Content = new StringContent(Body, Encoding.UTF8, "application/json") }; }
+    }
+    private sealed class QuoteHandler : HttpMessageHandler
+    {
+        public string Tool = "";
+        public JsonElement Arguments;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            var method = json.RootElement.GetProperty("method").GetString();
+            if (method == "tools/call")
+            {
+                var parameters = json.RootElement.GetProperty("params");
+                Tool = parameters.GetProperty("name").GetString()!;
+                Arguments = parameters.GetProperty("arguments").Clone();
+            }
+            var body = method switch
+            {
+                "initialize" => "{\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{}}}",
+                "tools/call" => "{\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"status\\\":\\\"quoted\\\",\\\"customerReply\\\":\\\"测试报价 12 CNY/KG\\\"}\"}]}}",
+                _ => "{}"
+            };
+            return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        }
     }
 }

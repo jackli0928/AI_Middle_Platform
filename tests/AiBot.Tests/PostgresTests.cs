@@ -66,6 +66,12 @@ internal static class PostgresTests
             var secrets = new SecretProtector(new EphemeralDataProtectionProvider());
             var robot = Robot.Create("持续连接验证", "test-bot", secrets.Protect("test-secret"), "", true);
             db.Robots.Add(robot); await db.SaveChangesAsync();
+            robot.ConfigureAutoReply(true, "quote", false, "", [Guid.NewGuid()]); await db.SaveChangesAsync();
+            var quoteMessage = new ReceivedMessage(robot.Id, robot.Name, "quote-once", "req-quote", "sales-user", "", "single", "text", "10件200kg2方到LAX", "{}", null);
+            check(await repository.InsertIfNewAsync(quoteMessage, default) && !await repository.InsertIfNewAsync(quoteMessage, default)
+                && await db.AutoReplies.CountAsync(x => x.ReceivedMessageId == quoteMessage.Id && x.Status == "queued") == 1,
+                "真实 PostgreSQL 将报价单聊和唯一后台任务一起入库");
+            robot.ConfigureAutoReply(false, "knowledge", true, "", []); await db.SaveChangesAsync();
             var factory = new TestSocketFactory();
             var services = new ServiceCollection(); services.AddLogging();
             services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["ConnectionStrings:Postgres"] = connection }).Build());
@@ -84,8 +90,8 @@ internal static class PostgresTests
                 check(factory.Sockets.Count == 1, "后台自动连接已启用的机器人");
                 var socket = factory.Sockets.Last();
                 socket.Publish(InboxTests.Frame("persistent-incoming", "group")); socket.Publish(InboxTests.Frame("persistent-incoming", "group"));
-                await UntilAsync(async () => await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 1);
-                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 1, "持续连接收到的消息经过生产存储路径入库并去重");
+                await UntilAsync(async () => await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id && x.MessageId == "persistent-incoming") == 1);
+                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id && x.MessageId == "persistent-incoming") == 1, "持续连接收到的消息经过生产存储路径入库并去重");
                 var receipt = await gateway.SendAsync(robot.BotId, "test-secret", "group", "wr-incoming-group", "simulated only", default);
                 check(receipt.Ok && factory.Sockets.Count == 1, "主动发送复用接收连接，不另开 WebSocket");
                 var knowledge = new KnowledgeEntry(); knowledge.Update(robot.Id, "自动回复集成测试", "", "自动回复测试答案", "exact", 10, true);
@@ -111,7 +117,7 @@ internal static class PostgresTests
                 check((await gateway.SendAsync(robot.BotId, "new-secret", "single", "user", "simulated", default)).Ok, "启用和更换 Secret 后自动建立新连接");
                 db.Robots.Remove(robot); await db.SaveChangesAsync();
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Count == 0));
-                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 2, "删除机器人关闭连接并保留历史接收记录");
+                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 3, "删除机器人关闭连接并保留历史接收记录");
             }
             finally { using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15)); await gateway.StopAsync(shutdown.Token); }
         }
