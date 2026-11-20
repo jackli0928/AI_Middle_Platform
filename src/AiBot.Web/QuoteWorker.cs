@@ -32,7 +32,7 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
                     {
                         if (!gateway.HasSession(candidate.BotId)) continue;
                         var conversation = candidate.RobotId + ":" + candidate.ChatType + ":"
-                            + (candidate.ChatType == "group" ? candidate.ChatId : candidate.SenderUserId);
+                            + (candidate.ChatType == "group" ? candidate.ChatId + ":" + candidate.SenderUserId : candidate.SenderUserId);
                         if (!inFlight.TryAdd(conversation, 0)) continue;
                         if (!slots.Wait(0)) { inFlight.TryRemove(conversation, out _); break; }
                         int claimed;
@@ -78,6 +78,7 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
         MessageLog? outgoing = null;
         ReceivedMessage? message = null;
         Robot? robot = null;
+        QuoteDraft? draft = null;
         var submitted = false;
         var answer = "";
         var stage = "load";
@@ -89,66 +90,67 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
                 || message.ChatType == "group" && !robot.ReplyToGroups)
             { log.Complete("skipped", "", "", "报价机器人已停用或群聊回复已关闭。", ""); return; }
             stage = "extract";
+            var open = await db.QuoteDrafts.Where(x => x.RobotId == robot.Id && x.ChatType == message.ChatType
+                && x.ChatId == message.ChatId && x.SenderUserId == message.SenderUserId && x.Status == "collecting")
+                .OrderByDescending(x => x.UpdatedAt).ToListAsync(ct);
+            var previous = open.FirstOrDefault(x => DateTimeOffset.UtcNow - x.UpdatedAt < TimeSpan.FromHours(24));
+            var priorState = previous is null ? null : JsonSerializer.Deserialize<QuoteDialogueState>(previous.StateJson);
+            var extractionNotes = new List<string>();
+            var modelPatch = new Dictionary<string, object>();
             var models = await db.AiModels.AsNoTracking().Where(x => x.Enabled).ToListAsync(ct);
-            var model = robot.GetModelPriority().Select(id => models.FirstOrDefault(x => x.Id == id)).FirstOrDefault(x => x is not null);
-            Dictionary<string, object> fields;
-            if (model is null)
+            foreach (var modelId in robot.GetModelPriority())
             {
-                fields = QuoteInquiryParser.Parse(message.Content);
-            }
-            else
-            {
-                var extraction = await scope.ServiceProvider.GetRequiredService<IAiCompletionClient>().CompleteAsync(model,
-                    "从当前空运询价中提取 JSON 对象，只输出 JSON，不解释。字段仅允许 origin、destination、piece、gross_weight、volume、cargo_type、server_type、packing、customs、delivery_time。必须从原文明确取得值，不推测。piece 为整数，重量 kg 和体积 m³ 为数字。客户未明确给出总体积时省略 volume；不要估算尺寸体积，系统会核对尺寸、单位和各组件数后计算。缺失字段省略。", message.Content, ct);
-                var jsonText = extraction.Trim();
-                if (jsonText.StartsWith("```", StringComparison.Ordinal))
-                    jsonText = jsonText[(jsonText.IndexOf('\n') + 1)..jsonText.LastIndexOf("```", StringComparison.Ordinal)].Trim();
-                using var parsed = JsonDocument.Parse(jsonText);
-                if (parsed.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("询价字段提取结果无效。");
-                fields = new Dictionary<string, object>();
-                foreach (var name in new[] { "origin", "destination", "cargo_type", "server_type", "packing", "customs", "delivery_time" })
-                    if (parsed.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-                        && !string.IsNullOrWhiteSpace(value.GetString())) fields[name] = value.GetString()!;
-                if (parsed.RootElement.TryGetProperty("piece", out var pieces) && pieces.ValueKind == JsonValueKind.Number
-                    && pieces.TryGetInt32(out var piece) && piece > 0)
-                    fields["piece"] = piece;
-                foreach (var name in new[] { "gross_weight", "volume" })
-                    if (parsed.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-                        && value.TryGetDouble(out var number) && double.IsFinite(number) && number > 0) fields[name] = number;
-                foreach (var (name, allowed) in new[]
+                var model = models.FirstOrDefault(x => x.Id == modelId);
+                if (model is null) continue;
+                try
                 {
-                    ("cargo_type", new[] { "普货", "带电", "温控", "电商", "冷藏", "危险品" }),
-                    ("server_type", new[] { "转飞", "直飞" }),
-                    ("packing", new[] { "托盘", "卡板", "超高托盘", "桶", "卷", "袋", "纸箱", "木箱", "框箱", "捆包", "散货" }),
-                    ("customs", new[] { "快件", "9610" })
-                })
-                    if (fields.TryGetValue(name, out var selected) && !allowed.Contains(selected)) fields.Remove(name);
-                if (fields.TryGetValue("delivery_time", out var date)
-                    && (!DateOnly.TryParseExact((string)date, "yyyy-MM-dd", out _)
-                        || !System.Text.RegularExpressions.Regex.IsMatch(message.Content, @"\b\d{4}[-年/.]\d{1,2}[-月/.]\d{1,2}")))
-                    fields.Remove("delivery_time");
+                    var extraction = await scope.ServiceProvider.GetRequiredService<IAiCompletionClient>().CompleteAsync(model,
+                        "只提取当前客户消息中新给出或明确更正的空运询价字段，不能复制历史值或猜测。只输出 JSON：{\"fields\":{\"piece\":{\"value\":2,\"evidence\":\"2托\"}}}。每个字段都需原文证据，缺失就省略。允许字段 origin、destination、piece、gross_weight、volume、cargo_type、server_type、packing、customs、delivery_time。数字用 kg、m³；客户未明确说总体积时省略 volume，尺寸由系统计算。", message.Content, ct);
+                    modelPatch = QuoteDialogue.ParseModelPatch(extraction, message.Content);
+                    break;
+                }
+                catch (AiCompletionException ex) { extractionNotes.Add(model.Name + "：" + ex.Message); logger.LogInformation("报价字段模型 {Model} 不可用：{Reason}", model.Name, ex.Message); }
+                catch (JsonException) { extractionNotes.Add(model.Name + "：未返回有效字段 JSON。"); }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { extractionNotes.Add(model.Name + "：接口超时。"); }
+                catch (System.Security.Cryptography.CryptographicException) { extractionNotes.Add(model.Name + "：模型密钥不可读取。"); }
             }
-            var volume = QuoteVolumeResolver.Resolve(message.Content,
-                fields.TryGetValue("piece", out var suppliedPieces) ? (int)suppliedPieces : null,
-                fields.TryGetValue("volume", out var suppliedVolume) ? (double)suppliedVolume : null);
-            if (volume.Pieces is { } resolvedPieces) fields["piece"] = resolvedPieces;
-            if (volume.Volume is { } resolvedVolume) fields["volume"] = resolvedVolume;
-            else fields.Remove("volume");
-            var missing = new[] { "destination", "piece", "gross_weight", "volume" }
-                .Where(x => !fields.ContainsKey(x) && !(x == "volume" && volume.Clarification is not null)).ToArray();
-            if (missing.Length > 0 || volume.Clarification is not null)
+            if (QuoteDialogue.StartsNewTicket(message.Content, priorState, modelPatch))
             {
-                var requests = missing.Select(x => x switch { "destination" => "目的地", "piece" => "件数", "gross_weight" => "总毛重（kg）", _ => "总体积（m³）" }).ToList();
-                if (volume.Clarification is { } clarification) requests.Add(clarification);
-                answer = "请补充或确认询价信息：" + string.Join("、", requests) + "。请在下一条消息中发送完整询价。";
+                foreach (var old in open) old.Supersede();
+                draft = new QuoteDraft(robot.Id, message.ChatType, message.ChatId, message.SenderUserId);
+                db.QuoteDrafts.Add(draft);
+                priorState = new QuoteDialogueState();
             }
+            else draft = previous!;
+            var step = QuoteDialogue.Apply(priorState!, message.Content, modelPatch);
+            draft!.Save(JsonSerializer.Serialize(step.State));
+            await db.SaveChangesAsync(ct);
+            if (!step.Ready) answer = step.Question!;
             else
             {
-                fields["all_content"] = message.Content;
-                using var arguments = JsonSerializer.SerializeToDocument(fields);
                 stage = "mcp";
                 await ReportProgressAsync(robot, message, "询价条件已识别，正在查询运价…", ct);
-                answer = AutoReplyService.LimitUtf8(await mcp.QuoteAsync(arguments.RootElement, ct), 4096);
+                var results = new List<string>();
+                var completedRoutes = 0;
+                foreach (var call in step.Calls)
+                {
+                    using var arguments = JsonSerializer.SerializeToDocument(call);
+                    try { results.Add(await mcp.QuoteAsync(arguments.RootElement, ct)); completedRoutes++; }
+                    catch (QuoteMcpInputException ex)
+                    {
+                        var labels = ex.MissingFields.Select(x => x switch
+                        {
+                            "destination" => "目的地", "piece" => "件数", "gross_weight" => "总毛重",
+                            "volume" => "总体积", _ => "本票询价原文"
+                        }).ToArray();
+                        results.Add("请补充或确认询价信息：" + (labels.Length > 0 ? string.Join("、", labels) : "当前报价条件")
+                            + "。直接回复需要补充的信息即可。");
+                    }
+                    catch (Exception) when (step.Calls.Count > 1 && !ct.IsCancellationRequested)
+                    { results.Add((call.TryGetValue("origin", out var airport) ? airport + "：" : "") + "报价接口暂时不可用，请稍后重试。"); }
+                }
+                answer = AutoReplyService.LimitUtf8(string.Join("\n\n", results), 4096);
+                if (completedRoutes > 0) draft.Complete();
             }
             stage = "send";
             robot = await db.Robots.AsNoTracking().SingleOrDefaultAsync(x => x.Id == log.RobotId, ct);
@@ -164,7 +166,8 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
             var result = await DeliverAsync(robot, secret, message, answer, ct);
             var status = result.Ok ? DeliveryStatus.Accepted : result.Stage is "unknown" or "send-unknown" or "stream-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
             outgoing.Complete(status, result.Message, result.RequestId, result.Errcode);
-            log.Complete(result.Ok ? "accepted" : status == DeliveryStatus.Unknown ? "unknown" : "failed", "报价 MCP", answer, result.Message, "");
+            log.Complete(result.Ok ? "accepted" : status == DeliveryStatus.Unknown ? "unknown" : "failed",
+                step.Ready ? "报价 MCP" : "询价补充", answer, result.Message, string.Join("\n", extractionNotes));
         }
         catch (Exception ex)
         {

@@ -29,16 +29,16 @@ public static partial class QuoteInquiryParser
             fields[name] = value;
     }
 
-    [GeneratedRegex(@"(?:目的地|到|至)\s*[：:]?\s*([A-Za-z]{3}|[\u4e00-\u9fff]{2,12})(?![A-Za-z\u4e00-\u9fff])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:目的地|到|至|飞)\s*[：:]?\s*([A-Za-z]{3}|[\u4e00-\u9fff]{2,12})(?![A-Za-z\u4e00-\u9fff])", RegexOptions.IgnoreCase)]
     private static partial Regex DestinationPattern();
 
-    [GeneratedRegex(@"(?<![\d.])(\d{1,9})\s*(?:件|箱|托|PCS|CTNS|PLTS)(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\d.])(\d{1,9})\s*(?:件|箱|托|PCS|CTNS|PLTS?|PALLETS?|PIECES?|CARTONS?)(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex PiecePattern();
 
     [GeneratedRegex(@"(?:总件数|合计|总计|共)\s*[:：]?\s*(\d{1,9})\s*(?:件|箱|托|PCS|CTNS|PLTS)(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex TotalPiecePattern();
 
-    [GeneratedRegex(@"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:KG|公斤|千克)(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:KGS?|公斤|千克)(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex WeightPattern();
 
     [GeneratedRegex(@"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:CBM|M3|M³|立方米|立方|方)(?![A-Za-z])", RegexOptions.IgnoreCase)]

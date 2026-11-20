@@ -12,6 +12,7 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<KnowledgeEntry> KnowledgeEntries => Set<KnowledgeEntry>();
     public DbSet<AiModelEndpoint> AiModels => Set<AiModelEndpoint>();
     public DbSet<AutoReplyLog> AutoReplies => Set<AutoReplyLog>();
+    public DbSet<QuoteDraft> QuoteDrafts => Set<QuoteDraft>();
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.HasDefaultSchema("ai_bot");
@@ -33,6 +34,13 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
             b.Property(x => x.ModelName).HasMaxLength(150); b.Property(x => x.ReplyContent).HasMaxLength(4096);
             b.Property(x => x.Result).HasMaxLength(2048); b.Property(x => x.Attempts).HasMaxLength(4000);
             b.HasIndex(x => x.ReceivedMessageId).IsUnique(); b.HasIndex(x => x.RobotId);
+        });
+        model.Entity<QuoteDraft>(b => {
+            b.ToTable("quote_drafts"); b.HasKey(x => x.Id);
+            b.Property(x => x.ChatType).HasMaxLength(10); b.Property(x => x.ChatId).HasMaxLength(256);
+            b.Property(x => x.SenderUserId).HasMaxLength(256); b.Property(x => x.Status).HasMaxLength(20);
+            b.Property(x => x.StateJson).HasColumnType("text"); b.Property(x => x.RuleVersion).HasMaxLength(40);
+            b.HasIndex(x => new { x.RobotId, x.ChatType, x.ChatId, x.SenderUserId, x.Status });
         });
         model.Entity<ReceivedMessage>(b => {
             b.ToTable("received_messages"); b.HasKey(x => x.Id);

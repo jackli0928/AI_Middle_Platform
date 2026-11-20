@@ -189,7 +189,11 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
         {
             using var scope = scopes.CreateScope();
             var automation = scope.ServiceProvider.GetService<IAutoReplyService>();
-            if (automation is not null) await automation.HandleAsync(robot.Id, robot.BotId, message, ct);
+            // Quote messages are queued atomically with the inbox insert. Do not register the same task twice.
+            var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
+            var quoteQueued = await db.AutoReplies.AsNoTracking()
+                .AnyAsync(x => x.ReceivedMessageId == message.Id && x.Mode == "quote", ct);
+            if (automation is not null && !quoteQueued) await automation.HandleAsync(robot.Id, robot.BotId, message, ct);
         }
         catch (Exception ex) { logger.LogWarning("机器人 {RobotId} 自动回复处理异常（{Type}），收到的消息已保存，不自动重发。", robot.Id, ex.GetType().Name); }
     }

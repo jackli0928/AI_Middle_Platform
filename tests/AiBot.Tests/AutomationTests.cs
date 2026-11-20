@@ -97,6 +97,42 @@ internal static class AutomationTests
             "申报总体积与尺寸计算值冲突时要求确认");
         check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60x40x50cm，总体积0.24方", 2, 0.24).Volume == 0.24,
             "申报总体积与尺寸计算值一致时保留客户申报值");
+        var shorthand = "2pallets/589.19kgs/120x100x106cm+120x100x102cm，货在东莞，可深圳/广州出，飞HYD，货好了";
+        var shorthandFields = QuoteInquiryParser.Parse(shorthand);
+        check((int)shorthandFields["piece"] == 2 && (double)shorthandFields["gross_weight"] == 589.19
+            && (string)shorthandFields["destination"] == "HYD", "英文托盘、kgs 和飞往机场的简写可识别");
+        var shorthandStep = QuoteDialogue.Apply(new QuoteDialogueState(), shorthand, new Dictionary<string, object>());
+        check(shorthandStep.Ready && shorthandStep.Calls.Count == 2
+            && shorthandStep.Calls[0]["origin"].Equals("SZX") && shorthandStep.Calls[1]["origin"].Equals("CAN")
+            && Math.Abs((double)shorthandStep.Calls[0]["volume"] - 2.496) < 0.000001
+            && !shorthandStep.Calls[0].ContainsKey("delivery_time") && !shorthandStep.Calls[0].ContainsKey("cargo_type"),
+            "完整简写询价按两个可用起运地分别查价，不猜测货好日期和货型");
+        var firstTurn = QuoteDialogue.Apply(new QuoteDialogueState(), "目的地 LAX，2件80kg", new Dictionary<string, object>());
+        check(!firstTurn.Ready && firstTurn.Question!.Contains("总体积") && firstTurn.State.CustomerMessages.Count == 1,
+            "缺体积时只追问缺项并保留本票原文");
+        var secondTurn = QuoteDialogue.Apply(firstTurn.State, "每件尺寸60×40×50cm", new Dictionary<string, object>());
+        check(secondTurn.Ready && Math.Abs((double)secondTurn.Calls[0]["volume"] - 0.24) < 0.000001
+            && (string)secondTurn.Calls[0]["all_content"] == "目的地 LAX，2件80kg\n每件尺寸60×40×50cm",
+            "同票多轮补充尺寸后查价，MCP 原文只含本票客户消息");
+        var correctedTurn = QuoteDialogue.Apply(secondTurn.State, "改成3件", new Dictionary<string, object>());
+        check(correctedTurn.Ready && (int)correctedTurn.Calls[0]["piece"] == 3
+            && Math.Abs((double)correctedTurn.Calls[0]["volume"] - 0.36) < 0.000001,
+            "明确更正件数时覆盖旧值并重新计算体积");
+        check(QuoteDialogue.StartsNewTicket(shorthand, firstTurn.State) && !QuoteDialogue.StartsNewTicket("改成3件", firstTurn.State),
+            "完整新询价重新开票，简短更正沿用当前票");
+        check(QuoteDialogue.StartsNewTicket("发洛杉矶，2件80kg，0.3方", firstTurn.State,
+            new Dictionary<string, object> { ["destination"] = "LAX" }), "模型识别出的完整新询价也不混入待补充旧票");
+        check(QuoteDialogue.StartsNewTicket("目的地 SFO，3件90kg", firstTurn.State),
+            "新票即使暂缺体积也不会继承待补充旧票资料");
+        var groundedPatch = QuoteDialogue.ParseModelPatch("{\"fields\":{\"destination\":{\"value\":\"LAX\",\"evidence\":\"飞LAX\"},\"piece\":{\"value\":2,\"evidence\":\"不存在\"}}}", "飞LAX");
+        check(groundedPatch.ContainsKey("destination") && !groundedPatch.ContainsKey("piece"), "模型字段必须有当前消息中的原文证据");
+        var unsafeVolume = QuoteDialogue.ParseModelPatch("{\"fields\":{\"volume\":{\"value\":2.5,\"evidence\":\"120x100x106cm\"},\"piece\":{\"value\":2,\"evidence\":\"两托\"}}}", "两托，120x100x106cm");
+        check(!unsafeVolume.ContainsKey("volume") && (int)unsafeVolume["piece"] == 2,
+            "模型不能把尺寸当作客户申报体积，中文数量证据可提取件数");
+        var cleared = QuoteDialogue.Apply(new QuoteDialogueState { Fields = new() { ["cargo_type"] = "带电", ["server_type"] = "直飞" } },
+            "不带电，直飞转飞均可", new Dictionary<string, object> { ["cargo_type"] = "普货", ["server_type"] = "转飞" });
+        check(!cleared.State.Fields.ContainsKey("cargo_type") && !cleared.State.Fields.ContainsKey("server_type"),
+            "否定旧货型和放宽航班条件时不保留旧筛选，也不接受模型推断");
         var longText = AutoReplyService.LimitUtf8(string.Concat(Enumerable.Repeat("中文😀", 1000)), 4096);
         check(Encoding.UTF8.GetByteCount(longText) <= 4096 && !longText.Contains('\uFFFD'), "AI 超长回复按 UTF-8 截断且不损坏 Unicode 字符");
 
@@ -114,6 +150,9 @@ internal static class AutomationTests
         handler.Code = HttpStatusCode.OK; handler.Body = "{\"status\":\"incomplete\",\"output\":[]}";
         try { await client.CompleteAsync(a, "", "", default); check(false, "未完成生成应抛出"); }
         catch (AiCompletionException) { check(true, "模型未完成生成时允许切换下一模型"); }
+        handler.Body = "{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"output\":[]}";
+        try { await client.CompleteAsync(a, "", "", default); check(false, "达到输出上限应抛出"); }
+        catch (AiCompletionException ex) { check(ex.Message.Contains("Token 上限"), "模型未完成时记录安全且可操作的原因"); }
 
         var quoteConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         { ["QuoteMcp:Transport"] = "http", ["QuoteMcp:Url"] = "https://quote.example.invalid/mcp", ["QuoteMcp:ToolName"] = "get_air_quote" }).Build();
@@ -124,6 +163,9 @@ internal static class AutomationTests
         check(await quoteClient.QuoteAsync(quoteArgs.RootElement, default) == "测试报价 12 CNY/KG"
             && quoteHandler.Tool == "get_air_quote" && quoteHandler.Arguments.GetProperty("piece").GetInt32() == 10,
             "报价 MCP 使用真实工具名和结构化入参，只接受报价正文");
+        quoteHandler.ToolBody = "{\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"{\\\"status\\\":\\\"invalid_arguments\\\",\\\"missingFields\\\":[\\\"volume\\\"]}\"}]}}";
+        try { await quoteClient.QuoteAsync(quoteArgs.RootElement, default); check(false, "MCP 缺项应抛出"); }
+        catch (QuoteMcpInputException ex) { check(ex.MissingFields.SequenceEqual(["volume"]), "MCP invalid_arguments 缺项安全传递给追问流程"); }
     }
     private sealed class ModelHandler : HttpMessageHandler
     {
@@ -134,6 +176,7 @@ internal static class AutomationTests
     private sealed class QuoteHandler : HttpMessageHandler
     {
         public string Tool = "";
+        public string? ToolBody;
         public JsonElement Arguments;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -148,7 +191,7 @@ internal static class AutomationTests
             var body = method switch
             {
                 "initialize" => "{\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{}}}",
-                "tools/call" => "{\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"status\\\":\\\"quoted\\\",\\\"customerReply\\\":\\\"测试报价 12 CNY/KG\\\"}\"}]}}",
+                "tools/call" => ToolBody ?? "{\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"status\\\":\\\"quoted\\\",\\\"customerReply\\\":\\\"测试报价 12 CNY/KG\\\"}\"}]}}",
                 _ => "{}"
             };
             return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };

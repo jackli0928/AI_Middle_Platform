@@ -37,7 +37,7 @@ internal static class PostgresTests
         try
         {
             await using var db = new BotDbContext(options); await db.Database.MigrateAsync();
-            check((await db.Database.GetAppliedMigrationsAsync()).Count() == 7, "真实 PostgreSQL 空库完整应用全部迁移");
+            check((await db.Database.GetAppliedMigrationsAsync()).Count() == 8, "真实 PostgreSQL 空库完整应用全部迁移");
             await MailSortingTests.RunPostgresAsync(db, options, check);
             var autoRobot = Robot.Create("自动回复持久化验证", "auto-test", "protected-test", "", false);
             autoRobot.ConfigureAutoReply(false, "ai", false, "测试提示", [Guid.NewGuid(), Guid.NewGuid()]);
@@ -105,7 +105,8 @@ internal static class PostgresTests
             services.AddSingleton<ISecretProtector>(secrets); services.AddSingleton<IWeComSocketFactory>(factory);
             services.AddScoped<IInboxRepository, InboxRepository>(); services.AddScoped<IInboxService, InboxService>(); services.AddSingleton<WeComGateway>();
             services.AddScoped<IAutomationRepository, AutomationRepository>(); services.AddScoped<IRobotRepository, RobotRepository>();
-            services.AddScoped<IAutoReplyService, AutoReplyService>(); services.AddSingleton<IAiCompletionClient, FakeAiClient>();
+            services.AddScoped<IAutoReplyService, AutoReplyService>();
+            var fakeAi = new FakeAiClient(); services.AddSingleton<IAiCompletionClient>(fakeAi);
             services.AddSingleton<IWeComGateway>(p => p.GetRequiredService<WeComGateway>());
             await using var provider = services.BuildServiceProvider();
             var gateway = provider.GetRequiredService<WeComGateway>();
@@ -159,6 +160,71 @@ internal static class PostgresTests
                         where incoming.MessageId == "group-quote-incomplete" && reply.ReplyContent.Contains("每组尺寸对应的件数")
                         select reply.Id).AnyAsync(),
                         "尺寸组数不明确时先在原群请求补充，不调用 MCP");
+                    socket.Publish(InboxTests.Frame("group-quote-other-sender", "group", content: "0.8方")
+                        .Replace("\"userid\":\"receiver-test\"", "\"userid\":\"another-user\"", StringComparison.Ordinal));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-other-sender" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Count == toolCalls && await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-other-sender" && reply.ReplyContent.Contains("目的地机场")
+                        select reply.Id).AnyAsync(), "同群其他发送人的体积不会补入当前业务员的询价");
+                    socket.Publish(InboxTests.Frame("group-quote-supplement", "group", content: "每件尺寸60×40×50cm"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-supplement" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Any(x => x.GetProperty("all_content").GetString()
+                        == "目的地 LAX，2件80kg，尺寸60×40×50cm\n每件尺寸60×40×50cm"
+                        && Math.Abs(x.GetProperty("volume").GetDouble() - 0.24) < 0.000001)
+                        && await db.QuoteDrafts.AsNoTracking().AnyAsync(x => x.RobotId == robot.Id && x.Status == "quoted"),
+                        "真实群聊跨消息补齐尺寸后引用本票原文查价，并持久化完成状态");
+                    var afterSupplement = quoteStub.Arguments.Count;
+                    socket.Publish(InboxTests.Frame("group-quote-new-partial", "group", content: "目的地 SFO，3件90kg"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-new-partial" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Count == afterSupplement, "新票缺体积时追问，不复用上一票体积");
+                    socket.Publish(InboxTests.Frame("group-quote-new-volume", "group", content: "总体积0.5方"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-new-volume" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Any(x => x.GetProperty("destination").GetString() == "SFO"
+                        && x.GetProperty("piece").GetInt32() == 3 && x.GetProperty("volume").GetDouble() == 0.5
+                        && x.GetProperty("all_content").GetString() == "目的地 SFO，3件90kg\n总体积0.5方"),
+                        "新票增量补充体积后查价，MCP 原文不混入上一票");
+                    var quoteModel = new AiModelEndpoint();
+                    quoteModel.Update("字段模型", "测试", "https://model.example.invalid/chat/completions", "test-model", "chat",
+                        secrets.Protect("test-key"), true, 5, 512);
+                    db.AiModels.Add(quoteModel);
+                    robot.ConfigureAutoReply(true, "quote", true, "", [quoteModel.Id]); await db.SaveChangesAsync();
+                    fakeAi.Generate = _ => throw new AiCompletionException("模型生成未完成，切换下一模型。");
+                    var shorthand = "2pallets/589.19kgs/120x100x106cm+120x100x102cm，货在东莞，可深圳/广州出，飞HYD，货好了";
+                    socket.Publish(InboxTests.Frame("group-quote-model-fallback", "group", content: shorthand));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-model-fallback" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Count(x => x.GetProperty("all_content").GetString() == shorthand) == 2
+                        && quoteStub.Arguments.Any(x => x.GetProperty("destination").GetString() == "HYD"
+                            && Math.Abs(x.GetProperty("volume").GetDouble() - 2.496) < 0.000001)
+                        && await (from reply in db.AutoReplies.AsNoTracking()
+                            join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                            where incoming.MessageId == "group-quote-model-fallback" && reply.Attempts.Contains("模型生成未完成")
+                            select reply.Id).AnyAsync(),
+                        "模型响应不可用时记录原因，明确的英文简写仍可经两个起运地查价");
+                    fakeAi.Generate = _ => "{\"fields\":{\"destination\":{\"value\":\"LAX\",\"evidence\":\"洛杉矶\"}}}";
+                    socket.Publish(InboxTests.Frame("group-quote-model-extract", "group", content: "发洛杉矶，2件80kg，0.3方"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-model-extract" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Any(x => x.GetProperty("all_content").GetString() == "发洛杉矶，2件80kg，0.3方"
+                        && x.GetProperty("destination").GetString() == "LAX"),
+                        "模型凭当前客户原文证据补全自然语言目的地后调用 MCP");
                 }
                 finally { using var quoteShutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10)); await quoteWorker.StopAsync(quoteShutdown.Token); }
                 robot.ConfigureAutoReply(false, "knowledge", true, "", []); await db.SaveChangesAsync();
@@ -190,7 +256,7 @@ internal static class PostgresTests
                 check((await gateway.SendAsync(robot.BotId, "new-secret", "single", "user", "simulated", default)).Ok, "启用和更换 Secret 后自动建立新连接");
                 db.Robots.Remove(robot); await db.SaveChangesAsync();
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Count == 0));
-                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 8, "删除机器人关闭连接并保留历史接收记录");
+                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 14, "删除机器人关闭连接并保留历史接收记录");
             }
             finally { using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15)); await gateway.StopAsync(shutdown.Token); }
         }

@@ -6,6 +6,11 @@ using Microsoft.Extensions.Configuration;
 
 namespace AiBot.Infrastructure;
 
+public sealed class QuoteMcpInputException(IReadOnlyList<string> missingFields) : Exception("报价工具要求补充或确认询价条件。")
+{
+    public IReadOnlyList<string> MissingFields { get; } = missingFields;
+}
+
 public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration)
 {
     public bool Configured => !string.IsNullOrWhiteSpace(configuration["QuoteMcp:ToolName"])
@@ -60,8 +65,7 @@ public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration
         }
         using var result = await CallAsync("tools/call", new { name = tool, arguments });
         var payload = result.RootElement.GetProperty("result");
-        if (payload.TryGetProperty("isError", out var error) && error.ValueKind == JsonValueKind.True)
-            throw new InvalidOperationException("报价工具返回错误。");
+        ThrowIfToolError(payload);
         if (payload.TryGetProperty("structuredContent", out var noQuote) && noQuote.ValueKind == JsonValueKind.Object
             && noQuote.TryGetProperty("status", out var emptyStatus) && emptyStatus.GetString() == "no_quotes")
             return "当前条件下暂无运价";
@@ -106,8 +110,7 @@ public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration
             using (await ExchangeAsync("initialize", new { protocolVersion = "2025-03-26", capabilities = new { }, clientInfo = new { name = "Li.AiBot", version = "1.0" } })) { }
             using var result = await ExchangeAsync("tools/call", new { name = tool, arguments });
             var payload = result.RootElement.GetProperty("result");
-            if (payload.TryGetProperty("isError", out var error) && error.ValueKind == JsonValueKind.True)
-                throw new InvalidOperationException("报价 MCP 返回错误。");
+            ThrowIfToolError(payload);
             var raw = payload.GetProperty("content")[0].GetProperty("text").GetString()!;
             using var quote = JsonDocument.Parse(raw);
             var data = quote.RootElement;
@@ -125,5 +128,36 @@ public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration
     {
         if (string.IsNullOrWhiteSpace(reply) || reply.Length > 4096) throw new InvalidOperationException("报价回复为空或过长。");
         return reply.Trim();
+    }
+
+    private static void ThrowIfToolError(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("isError", out var error) || error.ValueKind != JsonValueKind.True) return;
+        JsonElement data = default;
+        JsonDocument? document = null;
+        try
+        {
+            if (payload.TryGetProperty("structuredContent", out var structured) && structured.ValueKind == JsonValueKind.Object)
+                data = structured;
+            else if (payload.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
+            {
+                var raw = content.EnumerateArray().FirstOrDefault(x => x.TryGetProperty("type", out var type)
+                    && type.GetString() == "text" && x.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String);
+                if (raw.ValueKind == JsonValueKind.Object) document = JsonDocument.Parse(raw.GetProperty("text").GetString()!);
+                if (document is not null) data = document.RootElement;
+            }
+            if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("status", out var status)
+                && status.GetString() == "invalid_arguments")
+            {
+                var missing = data.TryGetProperty("missingFields", out var fields) && fields.ValueKind == JsonValueKind.Array
+                    ? fields.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)
+                        .Where(x => x is "destination" or "piece" or "gross_weight" or "volume" or "all_content").Distinct().ToArray()
+                    : [];
+                throw new QuoteMcpInputException(missing);
+            }
+        }
+        catch (JsonException) { /* Malformed tool errors are reported without copying provider content. */ }
+        finally { document?.Dispose(); }
+        throw new InvalidOperationException("报价 MCP 返回错误。");
     }
 }

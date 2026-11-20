@@ -41,6 +41,17 @@ public sealed class BotDbContextModelSnapshot : ModelSnapshot
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone"); b.Property<DateTimeOffset?>("CompletedAt").HasColumnType("timestamp with time zone");
             b.HasKey("Id"); b.HasIndex("ReceivedMessageId").IsUnique(); b.HasIndex("RobotId"); b.ToTable("auto_reply_logs", "ai_bot");
         });
+        modelBuilder.Entity("AiBot.Domain.QuoteDraft", b => {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid"); b.Property<Guid>("RobotId").HasColumnType("uuid");
+            b.Property<string>("ChatType").IsRequired().HasMaxLength(10).HasColumnType("character varying(10)");
+            b.Property<string>("ChatId").IsRequired().HasMaxLength(256).HasColumnType("character varying(256)");
+            b.Property<string>("SenderUserId").IsRequired().HasMaxLength(256).HasColumnType("character varying(256)");
+            b.Property<string>("Status").IsRequired().HasMaxLength(20).HasColumnType("character varying(20)");
+            b.Property<string>("StateJson").IsRequired().HasColumnType("text");
+            b.Property<string>("RuleVersion").IsRequired().HasMaxLength(40).HasColumnType("character varying(40)");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone");
+            b.HasKey("Id"); b.HasIndex("RobotId", "ChatType", "ChatId", "SenderUserId", "Status"); b.ToTable("quote_drafts", "ai_bot");
+        });
         modelBuilder.Entity("AiBot.Domain.ReceivedMessage", b => {
             b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
             b.Property<Guid>("RobotId").HasColumnType("uuid");

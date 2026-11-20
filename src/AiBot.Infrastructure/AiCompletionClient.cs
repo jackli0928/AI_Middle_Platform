@@ -27,7 +27,18 @@ public sealed class AiCompletionClient(HttpClient http, ISecretProtector secrets
             var root = json.RootElement;
             if (model.ApiStyle == "responses")
             {
-                if (root.TryGetProperty("status", out var status) && status.GetString() != "completed") throw new AiCompletionException("模型生成未完成，切换下一模型。");
+                if (root.TryGetProperty("status", out var status) && status.GetString() != "completed")
+                {
+                    var reason = root.TryGetProperty("incomplete_details", out var details) && details.ValueKind == JsonValueKind.Object
+                        && details.TryGetProperty("reason", out var value) && value.ValueKind == JsonValueKind.String
+                        ? value.GetString() : null;
+                    throw new AiCompletionException(reason switch
+                    {
+                        "max_output_tokens" => "模型输出达到配置的 Token 上限，未生成完整结果。",
+                        "content_filter" => "模型输出被内容过滤，未生成完整结果。",
+                        _ => "模型生成未完成，切换下一模型。"
+                    });
+                }
                 if (root.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array)
                 {
                     var texts = output.EnumerateArray().Where(x => x.TryGetProperty("type", out var type) && type.GetString() == "message" && x.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
