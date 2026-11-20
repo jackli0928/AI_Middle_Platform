@@ -81,6 +81,8 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
         QuoteDraft? draft = null;
         var submitted = false;
         var answer = "";
+        var extraAnswers = new List<string>();
+        var priceResolved = false;
         var stage = "load";
         try
         {
@@ -149,8 +151,12 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
                     catch (Exception) when (step.Calls.Count > 1 && !ct.IsCancellationRequested)
                     { results.Add((call.TryGetValue("origin", out var airport) ? airport + "：" : "") + "报价接口暂时不可用，请稍后重试。"); }
                 }
-                answer = AutoReplyService.LimitUtf8(string.Join("\n\n", results), 4096);
-                if (completedRoutes > 0) draft.Complete();
+                foreach (var routeReply in results)
+                    extraAnswers.AddRange(QuoteReplySegments.Split(routeReply, 4096));
+                answer = extraAnswers[0];
+                extraAnswers.RemoveAt(0);
+                priceResolved = completedRoutes > 0;
+                if (priceResolved) draft.Complete();
             }
             stage = "send";
             robot = await db.Robots.AsNoTracking().SingleOrDefaultAsync(x => x.Id == log.RobotId, ct);
@@ -166,8 +172,31 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
             var result = await DeliverAsync(robot, secret, message, answer, ct);
             var status = result.Ok ? DeliveryStatus.Accepted : result.Stage is "unknown" or "send-unknown" or "stream-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
             outgoing.Complete(status, result.Message, result.RequestId, result.Errcode);
-            log.Complete(result.Ok ? "accepted" : status == DeliveryStatus.Unknown ? "unknown" : "failed",
-                step.Ready ? "报价 MCP" : "询价补充", answer, result.Message, string.Join("\n", extractionNotes));
+            var deliveryStatuses = new List<DeliveryStatus> { status };
+            foreach (var extraAnswer in extraAnswers)
+            {
+                var extra = new MessageLog(Guid.NewGuid(), robot, target, extraAnswer, "自动回复·报价", message.ChatType);
+                try
+                {
+                    db.Messages.Add(extra);
+                    await db.SaveChangesAsync(ct);
+                    var sent = await gateway.SendAsync(robot.BotId, secret, message.ChatType, target, extraAnswer, ct);
+                    var extraStatus = sent.Ok ? DeliveryStatus.Accepted : sent.Stage is "unknown" or "send-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
+                    extra.Complete(extraStatus, sent.Message, sent.RequestId, sent.Errcode);
+                    deliveryStatuses.Add(extraStatus);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    extra.Complete(DeliveryStatus.Unknown, "分条报价发送结果待核实。", null, null);
+                    deliveryStatuses.Add(DeliveryStatus.Unknown);
+                    logger.LogWarning("报价任务 {Id} 的分条消息发送异常（{Type}）。", id, ex.GetType().Name);
+                }
+            }
+            var overallStatus = deliveryStatuses.Contains(DeliveryStatus.Unknown) ? "unknown"
+                : deliveryStatuses.Contains(DeliveryStatus.Failed) ? "failed" : "accepted";
+            log.Complete(overallStatus, priceResolved ? "报价 MCP" : "询价补充",
+                answer, extraAnswers.Count == 0 ? result.Message : $"分 {extraAnswers.Count + 1} 条回复；发送状态：{overallStatus}。",
+                string.Join("\n", extractionNotes));
         }
         catch (Exception ex)
         {

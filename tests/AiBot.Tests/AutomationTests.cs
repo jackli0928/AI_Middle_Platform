@@ -135,6 +135,10 @@ internal static class AutomationTests
             "否定旧货型和放宽航班条件时不保留旧筛选，也不接受模型推断");
         var longText = AutoReplyService.LimitUtf8(string.Concat(Enumerable.Repeat("中文😀", 1000)), 4096);
         check(Encoding.UTF8.GetByteCount(longText) <= 4096 && !longText.Contains('\uFFFD'), "AI 超长回复按 UTF-8 截断且不损坏 Unicode 字符");
+        var completeQuote = string.Concat(Enumerable.Repeat("方案😀\n", 2000));
+        var segments = QuoteReplySegments.Split(completeQuote, 4096);
+        check(segments.Count > 1 && segments.All(x => Encoding.UTF8.GetByteCount(x) <= 4096)
+            && string.Concat(segments) == completeQuote, "长报价按企微字节限制分条发送且保留全部字符");
 
         var handler = new ModelHandler(); using var http = new HttpClient(handler); var client = new AiCompletionClient(http, secrets);
         handler.Body = "{\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\",\"summary\":[]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Responses答案\"}]}]}";

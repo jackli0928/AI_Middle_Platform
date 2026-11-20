@@ -203,12 +203,14 @@ internal static class PostgresTests
                     robot.ConfigureAutoReply(true, "quote", true, "", [quoteModel.Id]); await db.SaveChangesAsync();
                     fakeAi.Generate = _ => throw new AiCompletionException("模型生成未完成，切换下一模型。");
                     var shorthand = "2pallets/589.19kgs/120x100x106cm+120x100x102cm，货在东莞，可深圳/广州出，飞HYD，货好了";
+                    var beforeTwoRoutes = socket.Commands.Count(x => x == "aibot_send_msg");
                     socket.Publish(InboxTests.Frame("group-quote-model-fallback", "group", content: shorthand));
                     await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
                         join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
                         where incoming.MessageId == "group-quote-model-fallback" && reply.Status == "accepted"
                         select reply.Id).AnyAsync());
-                    check(quoteStub.Arguments.Count(x => x.GetProperty("all_content").GetString() == shorthand) == 2
+                    check(socket.Commands.Count(x => x == "aibot_send_msg") == beforeTwoRoutes + 1
+                        && quoteStub.Arguments.Count(x => x.GetProperty("all_content").GetString() == shorthand) == 2
                         && quoteStub.Arguments.Any(x => x.GetProperty("destination").GetString() == "HYD"
                             && Math.Abs(x.GetProperty("volume").GetDouble() - 2.496) < 0.000001)
                         && await (from reply in db.AutoReplies.AsNoTracking()
@@ -225,6 +227,20 @@ internal static class PostgresTests
                     check(quoteStub.Arguments.Any(x => x.GetProperty("all_content").GetString() == "发洛杉矶，2件80kg，0.3方"
                         && x.GetProperty("destination").GetString() == "LAX"),
                         "模型凭当前客户原文证据补全自然语言目的地后调用 MCP");
+                    var longQuote = string.Concat(Enumerable.Repeat("报价😀\n", 1500));
+                    quoteStub.CustomerReply = longQuote;
+                    var streamBeforeLong = socket.Streams.Count;
+                    var sendsBeforeLong = socket.SentContents.Count;
+                    socket.Publish(InboxTests.Frame("group-quote-long-reply", "group", content: "发洛杉矶，2件80kg，0.3方"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-long-reply" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    var finalChunks = socket.Streams.Skip(streamBeforeLong).Where(x => x.Finish).Select(x => x.Content).ToArray();
+                    var proactiveChunks = socket.SentContents.Skip(sendsBeforeLong).ToArray();
+                    check(finalChunks.Length == 1 && proactiveChunks.Length > 0
+                        && finalChunks[0] + string.Concat(proactiveChunks) == longQuote,
+                        "超长 MCP 报价在企微分条发送完整内容，不按 4096 字节截断");
                 }
                 finally { using var quoteShutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10)); await quoteWorker.StopAsync(quoteShutdown.Token); }
                 robot.ConfigureAutoReply(false, "knowledge", true, "", []); await db.SaveChangesAsync();
@@ -256,7 +272,7 @@ internal static class PostgresTests
                 check((await gateway.SendAsync(robot.BotId, "new-secret", "single", "user", "simulated", default)).Ok, "启用和更换 Secret 后自动建立新连接");
                 db.Robots.Remove(robot); await db.SaveChangesAsync();
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Count == 0));
-                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 14, "删除机器人关闭连接并保留历史接收记录");
+                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 15, "删除机器人关闭连接并保留历史接收记录");
             }
             finally { using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15)); await gateway.StopAsync(shutdown.Token); }
         }
@@ -275,6 +291,7 @@ internal static class PostgresTests
     private sealed class QuoteStubHandler : HttpMessageHandler
     {
         public ConcurrentQueue<JsonElement> Arguments { get; } = new();
+        public string CustomerReply { get; set; } = "群聊测试报价";
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
@@ -283,7 +300,7 @@ internal static class PostgresTests
             var body = method switch
             {
                 "initialize" => "{\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{}}}",
-                "tools/call" => "{\"result\":{\"structuredContent\":{\"status\":\"quoted\",\"customerReply\":\"群聊测试报价\"}}}",
+                "tools/call" => JsonSerializer.Serialize(new { result = new { structuredContent = new { status = "quoted", customerReply = CustomerReply } } }),
                 _ => "{}"
             };
             return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };

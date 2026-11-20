@@ -12,6 +12,7 @@ public sealed class PersistentSocket(int authCode = 0, int sendCode = 0, bool ma
     private WebSocketState state = WebSocketState.Open;
     private (byte[] Bytes, bool End)? remaining;
     public ConcurrentQueue<string> Commands { get; } = new();
+    public ConcurrentQueue<string> SentContents { get; } = new();
     public ConcurrentQueue<(string RequestId, string StreamId, string Content, bool Finish)> Streams { get; } = new();
     public string? SentChatId { get; private set; }
     public bool DropSendAck { get; set; }
@@ -34,7 +35,12 @@ public sealed class PersistentSocket(int authCode = 0, int sendCode = 0, bool ma
         var cmd = json.RootElement.GetProperty("cmd").GetString()!;
         var id = json.RootElement.GetProperty("headers").GetProperty("req_id").GetString();
         Commands.Enqueue(cmd);
-        if (cmd == "aibot_send_msg") { SentChatId = json.RootElement.GetProperty("body").GetProperty("chatid").GetString(); if (DropSendAck) return Task.CompletedTask; }
+        if (cmd == "aibot_send_msg")
+        {
+            SentChatId = json.RootElement.GetProperty("body").GetProperty("chatid").GetString();
+            SentContents.Enqueue(json.RootElement.GetProperty("body").GetProperty("markdown").GetProperty("content").GetString()!);
+            if (DropSendAck) return Task.CompletedTask;
+        }
         if (cmd == "aibot_respond_msg")
         {
             var body = json.RootElement.GetProperty("body");

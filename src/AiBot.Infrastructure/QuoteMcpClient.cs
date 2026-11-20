@@ -126,8 +126,8 @@ public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration
 
     private static string ValidateReply(string? reply)
     {
-        if (string.IsNullOrWhiteSpace(reply) || reply.Length > 4096) throw new InvalidOperationException("报价回复为空或过长。");
-        return reply.Trim();
+        if (string.IsNullOrWhiteSpace(reply) || reply.Length > 16384) throw new InvalidOperationException("报价回复为空或过长。");
+        return reply;
     }
 
     private static void ThrowIfToolError(JsonElement payload)
