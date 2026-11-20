@@ -75,14 +75,18 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
         var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
         var log = await db.AutoReplies.SingleAsync(x => x.Id == id, ct);
         MessageLog? outgoing = null;
+        ReceivedMessage? message = null;
+        Robot? robot = null;
         var submitted = false;
         var answer = "";
+        var stage = "load";
         try
         {
-            var message = await db.ReceivedMessages.AsNoTracking().SingleAsync(x => x.Id == log.ReceivedMessageId, ct);
-            var robot = await db.Robots.AsNoTracking().SingleOrDefaultAsync(x => x.Id == log.RobotId, ct);
+            message = await db.ReceivedMessages.AsNoTracking().SingleAsync(x => x.Id == log.ReceivedMessageId, ct);
+            robot = await db.Robots.AsNoTracking().SingleOrDefaultAsync(x => x.Id == log.RobotId, ct);
             if (robot is null || !robot.Enabled || !robot.AutoReplyEnabled || robot.ReplyMode != "quote")
             { log.Complete("skipped", "", "", "报价机器人已停用。", ""); return; }
+            stage = "extract";
             var models = await db.AiModels.AsNoTracking().Where(x => x.Enabled).ToListAsync(ct);
             var model = robot.GetModelPriority().Select(id => models.FirstOrDefault(x => x.Id == id)).FirstOrDefault(x => x is not null);
             Dictionary<string, object> fields;
@@ -109,6 +113,18 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
                 foreach (var name in new[] { "gross_weight", "volume" })
                     if (parsed.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
                         && value.TryGetDouble(out var number) && double.IsFinite(number) && number > 0) fields[name] = number;
+                foreach (var (name, allowed) in new[]
+                {
+                    ("cargo_type", new[] { "普货", "带电", "温控", "电商", "冷藏", "危险品" }),
+                    ("server_type", new[] { "转飞", "直飞" }),
+                    ("packing", new[] { "托盘", "卡板", "超高托盘", "桶", "卷", "袋", "纸箱", "木箱", "框箱", "捆包", "散货" }),
+                    ("customs", new[] { "快件", "9610" })
+                })
+                    if (fields.TryGetValue(name, out var selected) && !allowed.Contains(selected)) fields.Remove(name);
+                if (fields.TryGetValue("delivery_time", out var date)
+                    && (!DateOnly.TryParseExact((string)date, "yyyy-MM-dd", out _)
+                        || !System.Text.RegularExpressions.Regex.IsMatch(message.Content, @"\b\d{4}[-年/.]\d{1,2}[-月/.]\d{1,2}")))
+                    fields.Remove("delivery_time");
             }
             var missing = new[] { "destination", "piece", "gross_weight", "volume" }.Where(x => !fields.ContainsKey(x)).ToArray();
             if (missing.Length > 0)
@@ -117,8 +133,10 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
             {
                 fields["all_content"] = message.Content;
                 using var arguments = JsonSerializer.SerializeToDocument(fields);
+                stage = "mcp";
                 answer = AutoReplyService.LimitUtf8(await mcp.QuoteAsync(arguments.RootElement, ct), 4096);
             }
+            stage = "send";
             robot = await db.Robots.AsNoTracking().SingleOrDefaultAsync(x => x.Id == log.RobotId, ct);
             if (robot is null || !robot.Enabled || !robot.AutoReplyEnabled || robot.ReplyMode != "quote")
             { log.Complete("skipped", "", answer, "查询期间报价机器人已停用。", ""); return; }
@@ -134,10 +152,36 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
         }
         catch (Exception ex)
         {
-            logger.LogWarning("报价任务 {Id} 处理异常（{Type}）。", id, ex.GetType().Name);
+            logger.LogWarning("报价任务 {Id} 在 {Stage} 阶段异常（{Type}）。", id, stage, ex.GetType().Name);
             var detail = submitted ? "发送结果待核实，请检查企微会话。" : "报价查询失败，本次未发送。";
             outgoing?.Complete(DeliveryStatus.Unknown, detail, null, null);
-            log.Complete(submitted ? "unknown" : "failed", "报价 MCP", answer, detail, "");
+            if (!submitted && outgoing is null && message is not null && robot is not null && !ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var current = await db.Robots.AsNoTracking().SingleOrDefaultAsync(x => x.Id == log.RobotId, ct);
+                    if (current is { Enabled: true, AutoReplyEnabled: true, ReplyMode: "quote" })
+                    {
+                        answer = "报价查询暂时无法完成，请稍后重新发送询价。";
+                        outgoing = new MessageLog(log.Id, current, message.SenderUserId, answer, "自动回复·报价", "single");
+                        db.Messages.Add(outgoing);
+                        await db.SaveChangesAsync(ct);
+                        submitted = true;
+                        var secret = scope.ServiceProvider.GetRequiredService<ISecretProtector>().Unprotect(current.ProtectedSecret);
+                        var notice = await gateway.SendAsync(current.BotId, secret, "single", message.SenderUserId, answer, ct);
+                        var status = notice.Ok ? DeliveryStatus.Accepted : notice.Stage is "unknown" or "send-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
+                        outgoing.Complete(status, notice.Message, notice.RequestId, notice.Errcode);
+                        detail = notice.Ok ? "报价查询失败，已发送提示。" : "报价查询失败，提示消息发送未完成。";
+                    }
+                }
+                catch (Exception noticeError)
+                {
+                    logger.LogWarning("报价任务 {Id} 的失败提示发送异常（{Type}）。", id, noticeError.GetType().Name);
+                    outgoing?.Complete(DeliveryStatus.Unknown, "提示消息结果待核实。", null, null);
+                    detail = "报价查询失败，提示消息结果待核实。";
+                }
+            }
+            log.Complete("failed", "报价 MCP", answer, detail, $"阶段：{stage}；异常：{ex.GetType().Name}");
         }
         finally
         {
