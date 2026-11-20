@@ -54,6 +54,15 @@ internal static class AutomationTests
         await Handle(Message("group")); await Handle(Message(type: "voice"));
         check(gateway.Calls == before && repository.Replies.Count(x => x.ReceivedMessageId == quoteMessage.Id) == 1
             && repository.Replies.Last(x => x.ReceivedMessageId == quoteMessage.Id).Status == "queued", "报价单聊只登记一次后台任务，不阻塞接收或直接发送");
+        robot.ConfigureAutoReply(true, "quote", true, "", [a.Id]);
+        var groupQuote = Message("group", text: "目的地 LAX，10件，200kg，2方");
+        await Handle(groupQuote); await Handle(groupQuote);
+        check(repository.Replies.Count(x => x.ReceivedMessageId == groupQuote.Id && x.Status == "queued") == 1,
+            "开启群聊回复后，群聊询价只登记一次报价任务");
+        robot.ConfigureAutoReply(true, "quote", false, "", [a.Id]);
+        var disabledGroupQuote = Message("group", text: "目的地 LAX，10件，200kg，2方");
+        await Handle(disabledGroupQuote);
+        check(repository.Replies.All(x => x.ReceivedMessageId != disabledGroupQuote.Id), "关闭群聊回复后不登记群聊报价任务");
         robot.ConfigureAutoReply(true, "quote", false, "", []);
         check(robot.GetModelPriority().Count == 0, "报价模式可以不配置 AI 模型");
         var parsedInquiry = QuoteInquiryParser.Parse("上海到洛杉矶，10件，200kg，2方");
@@ -61,6 +70,33 @@ internal static class AutomationTests
             && (double)parsedInquiry["gross_weight"] == 200 && (double)parsedInquiry["volume"] == 2,
             "报价 MCP 可从明确格式询价提取必填字段");
         check(!QuoteInquiryParser.Parse("到洛杉矶，10件，200kg").ContainsKey("volume"), "缺失体积时不会猜测报价参数");
+        var perPiece = QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60×40×50cm", 2, null);
+        check(perPiece.Pieces == 2 && Math.Abs(perPiece.Volume!.Value - 0.24) < 0.000001 && perPiece.Clarification is null,
+            "完整单组尺寸与每件数量可计算总体积");
+        var grouped = QuoteVolumeResolver.Resolve("目的地 LAX，总件数5件，80kg，2件 60x40x50cm，3件 50x40x40cm", 5, null);
+        check(grouped.Pieces == 5 && Math.Abs(grouped.Volume!.Value - 0.48) < 0.000001,
+            "多组尺寸按各组件数计算并核对总件数");
+        var listed = QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，尺寸60x40x50cm，70x50x40cm", 2, null);
+        check(listed.Pieces == 2 && Math.Abs(listed.Volume!.Value - 0.26) < 0.000001,
+            "尺寸清单与总件数一致时每组按一件计算");
+        var labelled = QuoteVolumeResolver.Resolve("目的地 LAX，1件80kg，长60cm宽40cm高50cm", 1, null);
+        check(labelled.Volume is { } labelledVolume && Math.Abs(labelledVolume - 0.12) < 0.000001,
+            "长宽高分别标注单位也可计算总体积");
+        var axisUnits = QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60cm×40cm×50cm", 2, null);
+        check(axisUnits.Volume is { } axisVolume && Math.Abs(axisVolume - 0.24) < 0.000001,
+            "三边分别标注单位的尺寸可计算总体积");
+        check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，尺寸待确认，总体积0.24方", 2, 0.24).Volume == 0.24,
+            "客户已明确申报总体积时不因未提供尺寸而拦截");
+        check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，尺寸60x40x50cm", 2, null).Clarification is not null
+            && QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60x40x50", 2, 0.24).Volume is null,
+            "件数分配或尺寸单位不明时不采用模型推测的体积");
+        check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，2件60x40x50cm，1件70x50cm", 2, null).Volume is null,
+            "尺寸清单存在不完整分组时不只按已识别分组报价");
+        var conflicting = QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60x40x50cm，总体积0.5方", 2, 0.5);
+        check(conflicting.Volume is null && conflicting.Clarification!.Contains("0.5") && conflicting.Clarification.Contains("0.24"),
+            "申报总体积与尺寸计算值冲突时要求确认");
+        check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60x40x50cm，总体积0.24方", 2, 0.24).Volume == 0.24,
+            "申报总体积与尺寸计算值一致时保留客户申报值");
         var longText = AutoReplyService.LimitUtf8(string.Concat(Enumerable.Repeat("中文😀", 1000)), 4096);
         check(Encoding.UTF8.GetByteCount(longText) <= 4096 && !longText.Contains('\uFFFD'), "AI 超长回复按 UTF-8 截断且不损坏 Unicode 字符");
 

@@ -11,8 +11,10 @@ public static partial class QuoteInquiryParser
         var destination = DestinationPattern().Matches(content);
         if (destination.Count == 1) fields["destination"] = destination[0].Groups[1].Value.ToUpperInvariant();
 
+        var totalPieces = TotalPiecePattern().Matches(content);
         var pieces = PiecePattern().Matches(content);
-        if (pieces.Count == 1 && int.TryParse(pieces[0].Groups[1].Value, out var count) && count > 0)
+        var selected = totalPieces.Count == 1 ? totalPieces[0] : pieces.Count == 1 ? pieces[0] : null;
+        if (selected is not null && int.TryParse(selected.Groups[1].Value, out var count) && count > 0)
             fields["piece"] = count;
 
         AddPositiveNumber(fields, "gross_weight", WeightPattern().Matches(content));
@@ -33,9 +35,12 @@ public static partial class QuoteInquiryParser
     [GeneratedRegex(@"(?<![\d.])(\d{1,9})\s*(?:件|箱|托|PCS|CTNS|PLTS)(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex PiecePattern();
 
+    [GeneratedRegex(@"(?:总件数|合计|总计|共)\s*[:：]?\s*(\d{1,9})\s*(?:件|箱|托|PCS|CTNS|PLTS)(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    private static partial Regex TotalPiecePattern();
+
     [GeneratedRegex(@"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:KG|公斤|千克)(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex WeightPattern();
 
-    [GeneratedRegex(@"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:M3|M³|立方米|立方|方)(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:CBM|M3|M³|立方米|立方|方)(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex VolumePattern();
 }

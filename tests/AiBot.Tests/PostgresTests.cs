@@ -1,13 +1,17 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.WebSockets;
+using System.Text;
 using System.Text.Json;
 using AiBot.Application;
 using AiBot.Domain;
 using AiBot.Infrastructure;
+using AiBot.Web;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 
 namespace AiBot.Tests;
@@ -71,10 +75,32 @@ internal static class PostgresTests
             check(await repository.InsertIfNewAsync(quoteMessage, default) && !await repository.InsertIfNewAsync(quoteMessage, default)
                 && await db.AutoReplies.CountAsync(x => x.ReceivedMessageId == quoteMessage.Id && x.Status == "queued") == 1,
                 "真实 PostgreSQL 将报价单聊和唯一后台任务一起入库");
-            robot.ConfigureAutoReply(false, "knowledge", true, "", []); await db.SaveChangesAsync();
+            robot.ConfigureAutoReply(true, "quote", true, "", []); await db.SaveChangesAsync();
+            var groupQuote = new ReceivedMessage(robot.Id, robot.Name, "group-quote-once", "req-group-quote", "sales-user",
+                "wr-quote-group", "group", "text", "目的地 LAX，10件，200kg，2方", "{}", null);
+            check(await repository.InsertIfNewAsync(groupQuote, default) && !await repository.InsertIfNewAsync(groupQuote, default)
+                && await db.AutoReplies.CountAsync(x => x.ReceivedMessageId == groupQuote.Id && x.Status == "queued") == 1,
+                "真实 PostgreSQL 在启用群聊回复时将群聊报价唯一入队");
+            robot.ConfigureAutoReply(true, "quote", false, "", []); await db.SaveChangesAsync();
+            var disabledGroupQuote = new ReceivedMessage(robot.Id, robot.Name, "group-quote-disabled", "req-disabled", "sales-user",
+                "wr-quote-group", "group", "text", "目的地 LAX，10件，200kg，2方", "{}", null);
+            check(await repository.InsertIfNewAsync(disabledGroupQuote, default)
+                && !await db.AutoReplies.AnyAsync(x => x.ReceivedMessageId == disabledGroupQuote.Id),
+                "真实 PostgreSQL 在关闭群聊回复时仅保存群聊消息，不触发报价");
+            await db.AutoReplies.Where(x => x.ReceivedMessageId == quoteMessage.Id)
+                .ExecuteUpdateAsync(x => x.SetProperty(y => y.Status, "skipped"));
+            robot.ConfigureAutoReply(true, "quote", true, "", []); await db.SaveChangesAsync();
             var factory = new TestSocketFactory();
             var services = new ServiceCollection(); services.AddLogging();
-            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["ConnectionStrings:Postgres"] = connection }).Build());
+            var quoteConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>
+            {
+                ["ConnectionStrings:Postgres"] = connection, ["QuoteMcp:Transport"] = "http",
+                ["QuoteMcp:Url"] = "https://quote.example.invalid/mcp", ["QuoteMcp:ToolName"] = "get_air_quote"
+            }).Build();
+            services.AddSingleton<IConfiguration>(quoteConfig);
+            var quoteStub = new QuoteStubHandler();
+            using var quoteHttp = new HttpClient(quoteStub);
+            services.AddSingleton(new QuoteMcpClient(quoteHttp, quoteConfig));
             services.AddDbContext<BotDbContext>(o => o.UseNpgsql(connection));
             services.AddSingleton<ISecretProtector>(secrets); services.AddSingleton<IWeComSocketFactory>(factory);
             services.AddScoped<IInboxRepository, InboxRepository>(); services.AddScoped<IInboxService, InboxService>(); services.AddSingleton<WeComGateway>();
@@ -89,6 +115,53 @@ internal static class PostgresTests
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Any(x => x.RobotId == robot.Id && x.State == "online")));
                 check(factory.Sockets.Count == 1, "后台自动连接已启用的机器人");
                 var socket = factory.Sockets.Last();
+                var quoteWorker = new QuoteWorker(provider.GetRequiredService<IServiceScopeFactory>(), gateway,
+                    provider.GetRequiredService<QuoteMcpClient>(), NullLogger<QuoteWorker>.Instance);
+                await quoteWorker.StartAsync(default);
+                try
+                {
+                    await UntilAsync(async () => await db.AutoReplies.AsNoTracking()
+                        .AnyAsync(x => x.ReceivedMessageId == groupQuote.Id && x.Status == "accepted"));
+                    var groupReply = await db.AutoReplies.AsNoTracking().SingleAsync(x => x.ReceivedMessageId == groupQuote.Id);
+                    check(socket.SentChatId == "wr-quote-group"
+                        && await db.Messages.AsNoTracking().AnyAsync(x => x.Id == groupReply.Id
+                            && x.TargetType == "group" && x.ChatId == "wr-quote-group" && x.Operator == "自动回复·报价"),
+                        "群聊报价任务经 MCP 后发送到原群 Chat ID，并保存群聊发送审计");
+                    var activeSends = socket.Commands.Count(x => x == "aibot_send_msg");
+                    socket.Publish(InboxTests.Frame("group-quote-stream", "group", content: "目的地 LAX，10件，200kg，2方"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-stream" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    var streamFrames = socket.Streams.Where(x => x.RequestId == "callback-1").ToArray();
+                    check(streamFrames.Length >= 2 && !streamFrames[0].Finish && streamFrames[^1].Finish
+                        && streamFrames.All(x => x.StreamId == streamFrames[0].StreamId)
+                        && streamFrames[^1].Content == "群聊测试报价"
+                        && socket.Commands.Count(x => x == "aibot_send_msg") == activeSends,
+                        "群聊回调显示进度并在原消息结束报价，不额外主动发送");
+                    socket.Publish(InboxTests.Frame("group-quote-dimensions", "group", content: "目的地 LAX，2件80kg，每件尺寸60×40×50cm"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-dimensions" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Any(x => x.GetProperty("piece").GetInt32() == 2
+                        && Math.Abs(x.GetProperty("volume").GetDouble() - 0.24) < 0.000001
+                        && x.GetProperty("all_content").GetString() == "目的地 LAX，2件80kg，每件尺寸60×40×50cm"),
+                        "完整尺寸经群聊报价任务换算为 m³ 并传给 MCP");
+                    var toolCalls = quoteStub.Arguments.Count;
+                    socket.Publish(InboxTests.Frame("group-quote-incomplete", "group", content: "目的地 LAX，2件80kg，尺寸60×40×50cm"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-incomplete" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Count == toolCalls && await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "group-quote-incomplete" && reply.ReplyContent.Contains("每组尺寸对应的件数")
+                        select reply.Id).AnyAsync(),
+                        "尺寸组数不明确时先在原群请求补充，不调用 MCP");
+                }
+                finally { using var quoteShutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10)); await quoteWorker.StopAsync(quoteShutdown.Token); }
+                robot.ConfigureAutoReply(false, "knowledge", true, "", []); await db.SaveChangesAsync();
                 socket.Publish(InboxTests.Frame("persistent-incoming", "group")); socket.Publish(InboxTests.Frame("persistent-incoming", "group"));
                 await UntilAsync(async () => await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id && x.MessageId == "persistent-incoming") == 1);
                 check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id && x.MessageId == "persistent-incoming") == 1, "持续连接收到的消息经过生产存储路径入库并去重");
@@ -98,7 +171,7 @@ internal static class PostgresTests
                 db.KnowledgeEntries.Add(knowledge); robot.ConfigureAutoReply(true, "knowledge", true, "", []); await db.SaveChangesAsync();
                 var callback = InboxTests.Frame("auto-integration", "group", content: "自动回复集成测试");
                 var sendCount = socket.Commands.Count(x => x == "aibot_send_msg"); socket.Publish(callback); socket.Publish(callback);
-                await UntilAsync(async () => await db.AutoReplies.AnyAsync(x => x.RobotId == robot.Id && x.Status == "accepted"));
+                await UntilAsync(async () => await db.Messages.AnyAsync(x => x.RobotId == robot.Id && x.Operator == "自动回复·知识库" && x.Status == DeliveryStatus.Accepted));
                 check(socket.Commands.Count(x => x == "aibot_send_msg") == sendCount + 1 && socket.SentChatId == "wr-incoming-group", "真实 PostgreSQL 回调入库、知识匹配、复用连接回复及重复回调去重完整链路");
                 check(await db.Messages.AnyAsync(x => x.RobotId == robot.Id && x.Operator == "自动回复·知识库"), "自动回复同时写入生产发送审计记录");
                 socket.Abort();
@@ -117,7 +190,7 @@ internal static class PostgresTests
                 check((await gateway.SendAsync(robot.BotId, "new-secret", "single", "user", "simulated", default)).Ok, "启用和更换 Secret 后自动建立新连接");
                 db.Robots.Remove(robot); await db.SaveChangesAsync();
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Count == 0));
-                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 3, "删除机器人关闭连接并保留历史接收记录");
+                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 8, "删除机器人关闭连接并保留历史接收记录");
             }
             finally { using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15)); await gateway.StopAsync(shutdown.Token); }
         }
@@ -132,5 +205,22 @@ internal static class PostgresTests
     {
         public ConcurrentQueue<PersistentSocket> Sockets { get; } = new();
         public Task<WebSocket> ConnectAsync(CancellationToken ct) { var socket = new PersistentSocket(); Sockets.Enqueue(socket); return Task.FromResult<WebSocket>(socket); }
+    }
+    private sealed class QuoteStubHandler : HttpMessageHandler
+    {
+        public ConcurrentQueue<JsonElement> Arguments { get; } = new();
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            var method = json.RootElement.GetProperty("method").GetString();
+            if (method == "tools/call") Arguments.Enqueue(json.RootElement.GetProperty("params").GetProperty("arguments").Clone());
+            var body = method switch
+            {
+                "initialize" => "{\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{}}}",
+                "tools/call" => "{\"result\":{\"structuredContent\":{\"status\":\"quoted\",\"customerReply\":\"群聊测试报价\"}}}",
+                _ => "{}"
+            };
+            return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        }
     }
 }

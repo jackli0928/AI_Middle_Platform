@@ -16,7 +16,7 @@ public sealed class AutoReplyService(IAutomationRepository repository, IRobotRep
         var log = new AutoReplyLog(message.Id, robot.Id, robot.ReplyMode);
         if (robot.ReplyMode == "quote")
         {
-            if (message.ChatType != "single" || message.MessageType != "text") return;
+            if (message.MessageType != "text") return;
             log.Queue();
             await repository.ClaimAsync(log, ct);
             return;

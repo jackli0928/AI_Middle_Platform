@@ -37,6 +37,12 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
         return session is null ? Task.FromResult(new SendResult(false, "offline", "机器人长连接尚未就绪，请在接收消息页面查看连接状态；刚保存配置时请稍等片刻。"))
             : session.SendAsync(targetType, targetId, content, ct);
     }
+    public Task<SendResult?> UpdateQuoteStreamAsync(string botId, string secret, Guid messageId, string content, bool finish, CancellationToken ct)
+    {
+        var session = workers.Values.Where(x => x.Robot.BotId == botId).Select(x => Volatile.Read(ref x.Session))
+            .FirstOrDefault(x => x is not null && x.Matches(botId, secret));
+        return session is null ? Task.FromResult<SendResult?>(null) : session.UpdateQuoteStreamAsync(messageId, content, finish, ct);
+    }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
@@ -157,6 +163,28 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
             catch (Exception) when (attempt < 2 && !ct.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(attempt + 1), ct); }
         }
         if (!isNew) return;
+        if (message.MessageType == "text" && DateTimeOffset.UtcNow - message.ReceivedAt < TimeSpan.FromSeconds(4))
+        {
+            try
+            {
+                using var scope = scopes.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
+                if (scope.ServiceProvider.GetService<QuoteMcpClient>()?.Configured == true
+                    && await db.AutoReplies.AsNoTracking().AnyAsync(x => x.ReceivedMessageId == message.Id && x.Mode == "quote", ct))
+                {
+                    var session = workers.Values.Where(x => x.Robot.Id == robot.Id).Select(x => Volatile.Read(ref x.Session)).FirstOrDefault(x => x is not null);
+                    if (session is not null && DateTimeOffset.UtcNow - message.ReceivedAt < TimeSpan.FromSeconds(4))
+                    {
+                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        deadline.CancelAfter(TimeSpan.FromSeconds(2));
+                        var result = await session.StartQuoteStreamAsync(message.Id, message.RequestId, deadline.Token);
+                        if (result is { Ok: false }) logger.LogInformation("报价消息 {MessageId} 的企微流式占位未确认（{Stage}）。", message.Id, result.Stage);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            { logger.LogWarning("报价消息 {MessageId} 的流式占位失败（{Type}），保留原主动发送流程。", message.Id, ex.GetType().Name); }
+        }
         try
         {
             using var scope = scopes.CreateScope();

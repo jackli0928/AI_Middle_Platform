@@ -12,8 +12,10 @@ public sealed class PersistentSocket(int authCode = 0, int sendCode = 0, bool ma
     private WebSocketState state = WebSocketState.Open;
     private (byte[] Bytes, bool End)? remaining;
     public ConcurrentQueue<string> Commands { get; } = new();
+    public ConcurrentQueue<(string RequestId, string StreamId, string Content, bool Finish)> Streams { get; } = new();
     public string? SentChatId { get; private set; }
     public bool DropSendAck { get; set; }
+    public bool DropStreamAck { get; set; }
     public bool DropHeartbeatAck { get; set; }
     public override WebSocketCloseStatus? CloseStatus => null;
     public override string? CloseStatusDescription => null;
@@ -33,6 +35,13 @@ public sealed class PersistentSocket(int authCode = 0, int sendCode = 0, bool ma
         var id = json.RootElement.GetProperty("headers").GetProperty("req_id").GetString();
         Commands.Enqueue(cmd);
         if (cmd == "aibot_send_msg") { SentChatId = json.RootElement.GetProperty("body").GetProperty("chatid").GetString(); if (DropSendAck) return Task.CompletedTask; }
+        if (cmd == "aibot_respond_msg")
+        {
+            var body = json.RootElement.GetProperty("body");
+            var stream = body.GetProperty("stream");
+            Streams.Enqueue((id!, stream.GetProperty("id").GetString()!, stream.GetProperty("content").GetString()!, stream.GetProperty("finish").GetBoolean()));
+            if (DropStreamAck) return Task.CompletedTask;
+        }
         if (cmd == "ping" && DropHeartbeatAck) return Task.CompletedTask;
         Publish("""{"errcode":999,"headers":{"req_id":"other-request"}}""");
         var receipt = malformed ? """{"headers":{"req_id":"ID"}}""".Replace("ID", id) : JsonSerializer.Serialize(new { headers = new { req_id = id }, errcode = cmd == "aibot_subscribe" ? authCode : cmd == "ping" ? 0 : sendCode, errmsg = "server test-secret" });

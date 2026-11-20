@@ -29,7 +29,7 @@ public sealed class InboxRepository(BotDbContext db) : IInboxRepository
             VALUES ({m.Id}, {m.RobotId}, {m.RobotName}, {m.MessageId}, {m.RequestId}, {m.SenderUserId}, {m.ChatId}, {m.ChatType}, {m.MessageType}, {m.Content}, {m.PayloadJson}, {m.SentAt}, {m.ReceivedAt})
             ON CONFLICT ("RobotId", "MessageId") DO NOTHING
             """, ct);
-        if (count == 1 && m.ChatType == "single" && m.MessageType == "text")
+        if (count == 1 && m.MessageType == "text")
         {
             var logId = Guid.NewGuid();
             var now = DateTimeOffset.UtcNow;
@@ -39,6 +39,7 @@ public sealed class InboxRepository(BotDbContext db) : IInboxRepository
                 SELECT {logId}, {m.Id}, {m.RobotId}, 'quote', 'queued', '', '', '报价任务排队中。', '', {now}, NULL
                 FROM ai_bot.robots r
                 WHERE r."Id" = {m.RobotId} AND r."Enabled" AND r."AutoReplyEnabled" AND r."ReplyMode" = 'quote'
+                    AND ({m.ChatType} = 'single' OR r."ReplyToGroups")
                 ON CONFLICT ("ReceivedMessageId") DO NOTHING
                 """, ct);
         }
