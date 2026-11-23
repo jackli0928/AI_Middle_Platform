@@ -107,7 +107,7 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
                 try
                 {
                     var extraction = await scope.ServiceProvider.GetRequiredService<IAiCompletionClient>().CompleteAsync(model,
-                        "只提取当前客户消息中新给出或明确更正的空运询价字段，不能复制历史值或猜测。只输出 JSON：{\"fields\":{\"piece\":{\"value\":2,\"evidence\":\"2托\"}}}。每个字段都需原文证据，缺失就省略。允许字段 origin、destination、piece、gross_weight、volume、cargo_type、server_type、packing、customs、delivery_time。数字用 kg、m³；客户未明确说总体积时省略 volume，尺寸由系统计算。", message.Content, ct);
+                        "只提取当前客户消息中新给出或明确更正的空运询价字段，不能复制历史值或猜测。只输出 JSON：{\"fields\":{\"piece\":{\"value\":2,\"evidence\":\"2托\"}}}。每个字段都需原文证据，缺失就省略。允许字段 origin、destination、piece、gross_weight、volume、cargo_type、server_type、packing、customs、delivery_time。起运地和目的地优先使用能唯一确认的机场三字码，例如深圳发SVO为 SZX 到 SVO；城市有多个机场且客户未指定时不要猜测代码。数字用 kg、m³；客户未明确说总体积时省略 volume，尺寸由系统计算。", message.Content, ct);
                     modelPatch = QuoteDialogue.ParseModelPatch(extraction, message.Content);
                     break;
                 }

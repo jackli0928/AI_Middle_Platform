@@ -196,6 +196,31 @@ internal static class PostgresTests
                         && x.GetProperty("piece").GetInt32() == 3 && x.GetProperty("volume").GetDouble() == 0.5
                         && x.GetProperty("all_content").GetString() == "目的地 SFO，3件90kg\n总体积0.5方"),
                         "新票增量补充体积后查价，MCP 原文不混入上一票");
+                    var svoInquiry = "深圳发SVO，2PLT，400KG，2.5CBM，请报价";
+                    socket.Publish(InboxTests.Frame("route-shenzhen-svo", "group", content: svoInquiry));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "route-shenzhen-svo" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Any(x => x.GetProperty("all_content").GetString() == svoInquiry
+                        && x.GetProperty("origin").GetString() == "SZX" && x.GetProperty("destination").GetString() == "SVO"),
+                        "深圳发机场码的自然表达在实际报价任务中传入 SZX 起运地");
+                    var frankfurtFirst = "深圳发法兰克福，400KG，请报价";
+                    socket.Publish(InboxTests.Frame("route-frankfurt-first", "group", content: frankfurtFirst));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "route-frankfurt-first" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    socket.Publish(InboxTests.Frame("route-frankfurt-supplement", "group", content: "2件，2cbm"));
+                    await UntilAsync(async () => await (from reply in db.AutoReplies.AsNoTracking()
+                        join incoming in db.ReceivedMessages.AsNoTracking() on reply.ReceivedMessageId equals incoming.Id
+                        where incoming.MessageId == "route-frankfurt-supplement" && reply.Status == "accepted"
+                        select reply.Id).AnyAsync());
+                    check(quoteStub.Arguments.Any(x => x.GetProperty("all_content").GetString() == frankfurtFirst + "\n2件，2cbm"
+                        && x.GetProperty("origin").GetString() == "SZX" && x.GetProperty("destination").GetString() == "FRA"
+                        && x.GetProperty("piece").GetInt32() == 2 && x.GetProperty("gross_weight").GetDouble() == 400
+                        && x.GetProperty("volume").GetDouble() == 2),
+                        "分轮补充后实际 MCP 入参使用 SZX 至 FRA 和完整本票资料");
                     var quoteModel = new AiModelEndpoint();
                     quoteModel.Update("字段模型", "测试", "https://model.example.invalid/chat/completions", "test-model", "chat",
                         secrets.Protect("test-key"), true, 5, 512);
@@ -272,7 +297,7 @@ internal static class PostgresTests
                 check((await gateway.SendAsync(robot.BotId, "new-secret", "single", "user", "simulated", default)).Ok, "启用和更换 Secret 后自动建立新连接");
                 db.Robots.Remove(robot); await db.SaveChangesAsync();
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Count == 0));
-                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 15, "删除机器人关闭连接并保留历史接收记录");
+                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 18, "删除机器人关闭连接并保留历史接收记录");
             }
             finally { using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15)); await gateway.StopAsync(shutdown.Token); }
         }

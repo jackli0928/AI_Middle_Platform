@@ -10,6 +10,7 @@ public sealed class QuoteDialogueState
     public List<string> CustomerMessages { get; set; } = [];
     public string DimensionMessage { get; set; } = "";
     public double? DeclaredVolume { get; set; }
+    public bool OriginNeedsConfirmation { get; set; }
 }
 
 public sealed record QuoteDialogueStep(QuoteDialogueState State, string? Question, IReadOnlyList<Dictionary<string, object>> Calls)
@@ -36,6 +37,8 @@ public static class QuoteDialogue
         var fields = QuoteInquiryParser.Parse(message);
         if (modelPatch is not null)
             foreach (var field in modelPatch) fields.TryAdd(field.Key, field.Value);
+        var route = QuoteRouteResolver.Parse(message);
+        if (route.Destination is not null) fields["destination"] = route.Destination;
         return fields.ContainsKey("destination") && fields.ContainsKey("piece") && fields.ContainsKey("gross_weight")
             || fields.ContainsKey("piece") && fields.ContainsKey("gross_weight")
                 && (fields.ContainsKey("volume") || Dimensions.IsMatch(message));
@@ -84,6 +87,14 @@ public static class QuoteDialogue
         state.CustomerMessages.Add(message);
         var patch = modelPatch.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         foreach (var field in QuoteInquiryParser.Parse(message)) patch[field.Key] = field.Value;
+        var route = QuoteRouteResolver.Parse(message);
+        if (route.OriginNeedsConfirmation)
+        {
+            state.Fields.Remove("origin");
+            state.OriginNeedsConfirmation = true;
+        }
+        if (route.Origin is not null) patch["origin"] = route.Origin;
+        if (route.Destination is not null) patch["destination"] = route.Destination;
         if (TwoOrigins.IsMatch(message)) patch["origin"] = "SZX,CAN";
         else if (Regex.IsMatch(message, @"(?:深圳|SZX)\s*(?:出|起飞|机场)", RegexOptions.IgnoreCase)) patch["origin"] = "SZX";
         else if (Regex.IsMatch(message, @"(?:广州|CAN)\s*(?:出|起飞|机场)", RegexOptions.IgnoreCase)) patch["origin"] = "CAN";
@@ -95,7 +106,7 @@ public static class QuoteDialogue
         {
             if (TextFields.Contains(name) && value is string text && text.Length is > 0 and <= 256)
             {
-                if (name is "origin" or "destination") text = text.ToUpperInvariant();
+                if (name is "origin" or "destination") text = QuoteRouteResolver.Normalize(text) ?? text.ToUpperInvariant();
                 if (name == "delivery_time" && !DateOnly.TryParseExact(text, "yyyy-MM-dd", out _)) continue;
                 if (!Allowed(name, text)) continue;
                 state.Fields[name] = text;
@@ -106,6 +117,7 @@ public static class QuoteDialogue
         }
         if (clearService) state.Fields.Remove("server_type");
         if (clearCargo) state.Fields.Remove("cargo_type");
+        if (state.Fields.ContainsKey("origin")) state.OriginNeedsConfirmation = false;
 
         if (patch.TryGetValue("volume", out var suppliedVolume) && suppliedVolume is double declared)
             state.DeclaredVolume = declared;
@@ -125,8 +137,9 @@ public static class QuoteDialogue
         {
             "destination" => "目的地机场", "piece" => "总件数", "gross_weight" => "总毛重（kg）", _ => "总体积（m³）或完整尺寸、单位和各组件数"
         }).ToArray();
-        if (missing.Length > 0 || dimensionClarification is not null)
-            return Question(state, string.Join("、", missing.Append(dimensionClarification).Where(x => x is not null)));
+        if (missing.Length > 0 || dimensionClarification is not null || state.OriginNeedsConfirmation)
+            return Question(state, string.Join("、", missing.Append(dimensionClarification)
+                .Append(state.OriginNeedsConfirmation ? "起运地机场三字码" : null).Where(x => x is not null)));
 
         var origins = state.Fields.TryGetValue("origin", out var origin) ? origin.Split(',', StringSplitOptions.RemoveEmptyEntries) : [""];
         var calls = new List<Dictionary<string, object>>();

@@ -124,6 +124,25 @@ internal static class AutomationTests
             new Dictionary<string, object> { ["destination"] = "LAX" }), "模型识别出的完整新询价也不混入待补充旧票");
         check(QuoteDialogue.StartsNewTicket("目的地 SFO，3件90kg", firstTurn.State),
             "新票即使暂缺体积也不会继承待补充旧票资料");
+        var frankfurtRoute = QuoteRouteResolver.Parse("深圳发法兰克福，400KG，请报价");
+        check(frankfurtRoute.Origin == "SZX" && frankfurtRoute.Destination == "FRA"
+            && QuoteRouteResolver.Parse("深圳发SVO，2PLT，400KG").Destination == "SVO"
+            && QuoteRouteResolver.Parse("从广州发往洛杉矶").Origin == "CAN"
+            && QuoteRouteResolver.Parse("深圳发货了吗").Origin is null,
+            "中文起运地发往中文城市或三字码的线路表达可规范化且不误认发货问句");
+        var frankfurtFirst = QuoteDialogue.Apply(new QuoteDialogueState(), "深圳发法兰克福，400KG，请报价", new Dictionary<string, object>());
+        var frankfurtSecond = QuoteDialogue.Apply(frankfurtFirst.State, "2件，2cbm", new Dictionary<string, object>());
+        check(!frankfurtFirst.Ready && frankfurtSecond.Ready && frankfurtSecond.Calls[0]["origin"].Equals("SZX")
+            && frankfurtSecond.Calls[0]["destination"].Equals("FRA"),
+            "先问缺项再补充时保留标准化起运地和目的地");
+        var modelCity = QuoteDialogue.Apply(new QuoteDialogueState(), "起运地深圳，目的地法兰克福，2件400kg2方",
+            new Dictionary<string, object> { ["origin"] = "深圳", ["destination"] = "法兰克福" });
+        check(modelCity.Ready && modelCity.Calls[0]["origin"].Equals("SZX") && modelCity.Calls[0]["destination"].Equals("FRA"),
+            "模型返回中文城市时仍在应用层统一转换明确的机场代码");
+        var unknownOrigin = QuoteDialogue.Apply(new QuoteDialogueState(), "汉堡发SVO，2件400kg2方", new Dictionary<string, object>());
+        check(!unknownOrigin.Ready && unknownOrigin.Question!.Contains("起运地机场三字码")
+            && QuoteRouteResolver.Parse("汉堡发SVO").OriginNeedsConfirmation,
+            "明确给出但尚无唯一机场映射的起运城市需确认，不能静默省略");
         var groundedPatch = QuoteDialogue.ParseModelPatch("{\"fields\":{\"destination\":{\"value\":\"LAX\",\"evidence\":\"飞LAX\"},\"piece\":{\"value\":2,\"evidence\":\"不存在\"}}}", "飞LAX");
         check(groundedPatch.ContainsKey("destination") && !groundedPatch.ContainsKey("piece"), "模型字段必须有当前消息中的原文证据");
         var unsafeVolume = QuoteDialogue.ParseModelPatch("{\"fields\":{\"volume\":{\"value\":2.5,\"evidence\":\"120x100x106cm\"},\"piece\":{\"value\":2,\"evidence\":\"两托\"}}}", "两托，120x100x106cm");
