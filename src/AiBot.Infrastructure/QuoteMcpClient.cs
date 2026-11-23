@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text;
 using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 
@@ -93,7 +94,9 @@ public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration
     private async Task<string> QuoteStdioAsync(string tool, JsonElement arguments, CancellationToken ct)
     {
         var start = new ProcessStartInfo("node") { RedirectStandardInput = true, RedirectStandardOutput = true,
-            RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            RedirectStandardError = true, StandardInputEncoding = new UTF8Encoding(false),
+            StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false),
+            UseShellExecute = false, CreateNoWindow = true };
         start.ArgumentList.Add(configuration["QuoteMcp:ScriptPath"]!);
         start.Environment["AIR_QUOTE_PL_KEY"] = configuration["QuoteMcp:Token"] ?? "";
         using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动报价 MCP。");

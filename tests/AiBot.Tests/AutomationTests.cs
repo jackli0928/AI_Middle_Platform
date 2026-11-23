@@ -189,6 +189,39 @@ internal static class AutomationTests
         quoteHandler.ToolBody = "{\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"{\\\"status\\\":\\\"invalid_arguments\\\",\\\"missingFields\\\":[\\\"volume\\\"]}\"}]}}";
         try { await quoteClient.QuoteAsync(quoteArgs.RootElement, default); check(false, "MCP 缺项应抛出"); }
         catch (QuoteMcpInputException ex) { check(ex.MissingFields.SequenceEqual(["volume"]), "MCP invalid_arguments 缺项安全传递给追问流程"); }
+
+        var nodeAvailable = false;
+        try
+        {
+            using var probe = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("node", "--version")
+                { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+            if (probe is not null) { await probe.WaitForExitAsync(); nodeAvailable = probe.ExitCode == 0; }
+        }
+        catch (System.ComponentModel.Win32Exception) { }
+        if (nodeAvailable)
+        {
+            var script = Path.Combine(Path.GetTempPath(), "aibot-utf8-" + Guid.NewGuid().ToString("N") + ".mjs");
+            try
+            {
+                await File.WriteAllTextAsync(script, """
+                    import { createInterface } from 'node:readline';
+                    for await (const line of createInterface({ input: process.stdin })) {
+                      const request = JSON.parse(line);
+                      const data = request.method === 'initialize'
+                        ? { protocolVersion: '2025-03-26', capabilities: {} }
+                        : { content: [{ type: 'text', text: JSON.stringify({ status: 'quoted', customerReply: '空运报价｜SZX → MUC\n货物：2 件 · 500 kg · 😀' }) }] };
+                      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: data }) + '\n');
+                    }
+                    """, new UTF8Encoding(false));
+                var stdioConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                { ["QuoteMcp:Transport"] = "stdio", ["QuoteMcp:ScriptPath"] = script, ["QuoteMcp:ToolName"] = "get_air_quote" }).Build();
+                using var stdioHttp = new HttpClient();
+                var stdioClient = new QuoteMcpClient(stdioHttp, stdioConfig);
+                check(await stdioClient.QuoteAsync(quoteArgs.RootElement, default)
+                    == "空运报价｜SZX → MUC\n货物：2 件 · 500 kg · 😀", "本地 MCP stdio 中文和表情按 UTF-8 完整往返");
+            }
+            finally { File.Delete(script); }
+        }
     }
     private sealed class ModelHandler : HttpMessageHandler
     {
