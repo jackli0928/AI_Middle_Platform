@@ -85,11 +85,19 @@ internal static class AutomationTests
         var axisUnits = QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60cm×40cm×50cm", 2, null);
         check(axisUnits.Volume is { } axisVolume && Math.Abs(axisVolume - 0.24) < 0.000001,
             "三边分别标注单位的尺寸可计算总体积");
+        var implicitCm = QuoteDialogue.Apply(new QuoteDialogueState(), "深圳发MUC，2件500kg，每件尺寸60x40x50，普货", new Dictionary<string, object>());
+        check(implicitCm.Ready && Math.Abs((double)implicitCm.Calls[0]["volume"] - 0.24) < 0.000001,
+            "未标注单位的完整尺寸按厘米计算并进入报价调用");
+        var implicitList = QuoteVolumeResolver.Resolve("目的地 MUC，2件500kg，60x40x50+70x50x40", 2, null);
+        check(implicitList.Volume is { } listVolume && Math.Abs(listVolume - 0.26) < 0.000001,
+            "逐件尺寸清单未标注单位时按厘米计算");
         check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，尺寸待确认，总体积0.24方", 2, 0.24).Volume == 0.24,
             "客户已明确申报总体积时不因未提供尺寸而拦截");
         check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，尺寸60x40x50cm", 2, null).Clarification is not null
-            && QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60x40x50", 2, 0.24).Volume is null,
-            "件数分配或尺寸单位不明时不采用模型推测的体积");
+            && QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60x40x50", 2, 0.24).Volume == 0.24,
+            "件数分配不明时追问，未标单位按厘米且与申报体积一致时通过");
+        check(QuoteVolumeResolver.Resolve("目的地 LAX，1件80kg，长60cm宽40m高50", 1, null).Clarification is not null,
+            "已标注单位互相冲突且有缺失时要求确认");
         check(QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，2件60x40x50cm，1件70x50cm", 2, null).Volume is null,
             "尺寸清单存在不完整分组时不只按已识别分组报价");
         var conflicting = QuoteVolumeResolver.Resolve("目的地 LAX，2件80kg，每件尺寸60x40x50cm，总体积0.5方", 2, 0.5);
@@ -219,8 +227,25 @@ internal static class AutomationTests
                 var stdioClient = new QuoteMcpClient(stdioHttp, stdioConfig);
                 check(await stdioClient.QuoteAsync(quoteArgs.RootElement, default)
                     == "空运报价｜SZX → MUC\n货物：2 件 · 500 kg · 😀", "本地 MCP stdio 中文和表情按 UTF-8 完整往返");
+                await File.WriteAllTextAsync(script, """
+                    import { createInterface } from 'node:readline';
+                    import { existsSync, writeFileSync } from 'node:fs';
+                    const marker = process.argv[1] + '.attempt';
+                    for await (const line of createInterface({ input: process.stdin })) {
+                      const request = JSON.parse(line);
+                      let data;
+                      if (request.method === 'initialize') data = { protocolVersion: '2025-03-26' };
+                      else if (!existsSync(marker)) {
+                        writeFileSync(marker, '1');
+                        data = { isError: true, content: [{ type: 'text', text: JSON.stringify({ status: 'connection_error' }) }] };
+                      } else data = { content: [{ type: 'text', text: JSON.stringify({ status: 'quoted', customerReply: '重试后报价成功' }) }] };
+                      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: data }) + '\n');
+                    }
+                    """, new UTF8Encoding(false));
+                check(await stdioClient.QuoteAsync(quoteArgs.RootElement, default) == "重试后报价成功"
+                    && File.Exists(script + ".attempt"), "MCP 上游连接瞬时失败时有界重试一次");
             }
-            finally { File.Delete(script); }
+            finally { File.Delete(script); File.Delete(script + ".attempt"); }
         }
     }
     private sealed class ModelHandler : HttpMessageHandler

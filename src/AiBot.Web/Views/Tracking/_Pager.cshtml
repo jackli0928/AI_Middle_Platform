@@ -1,0 +1,13 @@
+@model TrackingPager
+@{ var pages = Math.Max(1, (Model.Total + Model.PageSize - 1) / Model.PageSize); }
+<nav class="pagination" aria-label="轨迹记录分页">
+    @if (Model.Page > 1)
+    {
+        <a class="button secondary compact" asp-action="@Model.Action" asp-route-awb="@Model.Awb" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-cached="@Model.Cached" asp-route-page="@(Model.Page - 1)">上一页</a>
+    }
+    <span>第 @Model.Page / @pages 页 · 共 @Model.Total 条</span>
+    @if (Model.Page < pages)
+    {
+        <a class="button secondary compact" asp-action="@Model.Action" asp-route-awb="@Model.Awb" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-cached="@Model.Cached" asp-route-page="@(Model.Page + 1)">下一页</a>
+    }
+</nav>

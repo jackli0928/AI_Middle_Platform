@@ -37,7 +37,7 @@ internal static class PostgresTests
         try
         {
             await using var db = new BotDbContext(options); await db.Database.MigrateAsync();
-            check((await db.Database.GetAppliedMigrationsAsync()).Count() == 8, "真实 PostgreSQL 空库完整应用全部迁移");
+            check((await db.Database.GetAppliedMigrationsAsync()).SequenceEqual(db.Database.GetMigrations()), "真实 PostgreSQL 空库完整应用全部迁移");
             await MailSortingTests.RunPostgresAsync(db, options, check);
             var autoRobot = Robot.Create("自动回复持久化验证", "auto-test", "protected-test", "", false);
             autoRobot.ConfigureAutoReply(false, "ai", false, "测试提示", [Guid.NewGuid(), Guid.NewGuid()]);
@@ -298,8 +298,27 @@ internal static class PostgresTests
                 db.Robots.Remove(robot); await db.SaveChangesAsync();
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Count == 0));
                 check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 18, "删除机器人关闭连接并保留历史接收记录");
+
+                var trackingRobot = Robot.Create("轨迹流式验证", "test-tracking-progress", secrets.Protect("tracking-secret"), "", true);
+                trackingRobot.ConfigureTracking(Guid.NewGuid());
+                db.Robots.Add(trackingRobot);
+                await db.SaveChangesAsync();
+                await UntilAsync(() => Task.FromResult(gateway.GetStates().Any(x => x.RobotId == trackingRobot.Id && x.State == "online")));
+                var trackingSocket = factory.Sockets.Last();
+                trackingSocket.Publish(InboxTests.Frame("tracking-stream", content: "帮我订阅 545-98910626 的轨迹"));
+                await UntilAsync(() => Task.FromResult(!trackingSocket.Streams.IsEmpty));
+                var initial = trackingSocket.Streams.First();
+                var inbound = await db.ReceivedMessages.AsNoTracking().SingleAsync(x => x.RobotId == trackingRobot.Id && x.MessageId == "tracking-stream");
+                check(!initial.Finish && initial.Content.Contains("正在识别你的指令")
+                    && await db.TrackingCommands.AnyAsync(x => x.Id == inbound.Id && x.Status == "queued"),
+                    "轨迹命令仍排队时企微已经收到识别进度");
+                await gateway.UpdateReplyStreamAsync(trackingRobot.BotId, "tracking-secret", inbound.Id, "订阅成功。", true, default);
+                var final = trackingSocket.Streams.Last();
+                check(final.Finish && final.RequestId == initial.RequestId && final.StreamId == initial.StreamId && final.Content == "订阅成功。",
+                    "轨迹进度和执行结果共用原企微回调与流 ID");
             }
             finally { using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15)); await gateway.StopAsync(shutdown.Token); }
+            await TrackingTests.RunPostgresAsync(db, secrets, check);
         }
         finally
         {

@@ -11,6 +11,8 @@ public sealed class Robot
     public string Description { get; private set; } = "";
     public bool Enabled { get; private set; } = true;
     public bool AutoReplyEnabled { get; private set; }
+    public Guid? TrackingModelId { get; private set; }
+    public void ConfigureTracking(Guid? modelId) => TrackingModelId = modelId;
     public string ReplyMode { get; private set; } = "knowledge";
     public bool ReplyToGroups { get; private set; } = true;
     public string ReplyPrompt { get; private set; } = "";

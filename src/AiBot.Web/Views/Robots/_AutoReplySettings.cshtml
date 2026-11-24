@@ -1,6 +1,17 @@
 @model RobotInput
 @{ var models = ViewBag.AiModels as IReadOnlyList<AiModelInfo> ?? []; var ids = Model.ModelPriority.Count == 0 ? new List<Guid> { Guid.Empty } : Model.ModelPriority; }
-<section class="robot-automation"><label class="switch-row"><span><strong>收到消息后自动回复</strong><small>默认关闭；开启后对新收到的适用消息回复一次</small></span><span class="switch"><input asp-for="AutoReplyEnabled"/><span></span></span></label>
+<section class="robot-automation">
+<div class="field">
+    <label asp-for="TrackingModelId">轨迹业务意图模型</label>
+    <select asp-for="TrackingModelId">
+        <option value="">不启用轨迹业务</option>
+        @foreach (var endpoint in models.Where(x => x.Enabled && x.HasApiKey || x.Id == Model.TrackingModelId))
+        {
+            <option value="@endpoint.Id">@endpoint.Name · @endpoint.Provider@(endpoint.Enabled ? "" : "（已停用）")</option>
+        }
+    </select>
+    <p class="field-help">选择模型后，机器人可在私聊中识别轨迹订阅、取消、异常监控和推送记录查询。</p>
+</div><label class="switch-row"><span><strong>收到消息后自动回复</strong><small>默认关闭；开启后对新收到的适用消息回复一次</small></span><span class="switch"><input asp-for="AutoReplyEnabled"/><span></span></span></label>
 <div id="auto-reply-options" hidden="@(!Model.AutoReplyEnabled)"><div class="field"><label asp-for="ReplyMode">回复机制</label><select asp-for="ReplyMode"><option value="knowledge">1 · 匹配知识库回复</option><option value="ai">2 · AI 回复</option><option value="quote">3 · AI 报价</option></select></div>
 <div id="quote-reply-help" class="automation-help" hidden="@(Model.ReplyMode != "quote")">可直接选择报价 MCP，无需配置 AI 模型。请按「目的地 LAX，10件，200kg，2方」提供完整询价；自由表述可选配 AI 模型提取字段。当前版本处理单聊文字询价。</div>
 <div id="knowledge-reply-help" class="automation-help" hidden="@(Model.ReplyMode != "knowledge")">匹配已启用的共享或机器人专属知识条目，未匹配时不回复。<a asp-controller="Knowledge" asp-action="Index">管理知识库 →</a></div>

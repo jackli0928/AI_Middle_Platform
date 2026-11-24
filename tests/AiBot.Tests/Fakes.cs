@@ -29,6 +29,8 @@ public sealed class TestApp : WebApplicationFactory<global::Program>
             services.Remove(startup);
             services.Remove(services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(MailSortingWorker)));
             services.Remove(services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(AiBot.Web.QuoteWorker)));
+            services.Remove(services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(AiBot.Web.TrackingWorker)));
+            services.Remove(services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(AiBot.Web.TrackingPollWorker)));
             services.Remove(services.Single(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType == typeof(AiBot.Infrastructure.WeComBackgroundWorker)));
             foreach (var warmup in services.Where(x => x.ServiceType == typeof(IHostedService) && x.ImplementationType?.Name == "DataProtectionHostedService").ToList()) services.Remove(warmup);
             services.RemoveAll<IRobotRepository>(); services.AddSingleton<IRobotRepository>(Repository);
@@ -55,6 +57,9 @@ public sealed class FakeGateway : IWeComGateway
     public int Calls { get; private set; }
     public string? LastTargetType { get; private set; }
     public string? LastTargetId { get; private set; }
+    public Func<Guid, string, bool, SendResult?>? ReplyStream { get; set; }
+    public Task<SendResult?> UpdateReplyStreamAsync(string botId, string secret, Guid messageId, string content, bool finish, CancellationToken ct) =>
+        Task.FromResult(ReplyStream?.Invoke(messageId, content, finish));
     public SendResult Result { get; set; } = new(true, "send", "企业微信已接受消息。", "test-receipt", 0);
     public Task<SendResult> SendAsync(string botId, string secret, string targetType, string targetId, string content, CancellationToken ct)
     { Calls++; LastTargetType = targetType; LastTargetId = targetId; return Task.FromResult(Result); }

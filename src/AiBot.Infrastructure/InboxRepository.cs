@@ -31,6 +31,13 @@ public sealed class InboxRepository(BotDbContext db) : IInboxRepository
             """, ct);
         if (count == 1 && m.MessageType == "text")
         {
+            if (m.ChatType == "single" && MessageSender.IsHuman(m))
+                await db.Database.ExecuteSqlInterpolatedAsync($"""
+                    INSERT INTO ai_bot.tracking_commands ("Id", "RobotId", "SenderUserId", "Status", "Result", "Intent", "CreatedAt")
+                    SELECT {m.Id}, r."Id", {m.SenderUserId}, 'queued', '', '', {m.ReceivedAt}
+                    FROM ai_bot.robots r
+                    WHERE r."Id" = {m.RobotId} AND r."Enabled" AND r."TrackingModelId" IS NOT NULL
+                    """, ct);
             var logId = Guid.NewGuid();
             var now = DateTimeOffset.UtcNow;
             await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -40,6 +47,7 @@ public sealed class InboxRepository(BotDbContext db) : IInboxRepository
                 FROM ai_bot.robots r
                 WHERE r."Id" = {m.RobotId} AND r."Enabled" AND r."AutoReplyEnabled" AND r."ReplyMode" = 'quote'
                     AND ({m.ChatType} = 'single' OR r."ReplyToGroups")
+                    AND NOT EXISTS (SELECT 1 FROM ai_bot.tracking_commands t WHERE t."Id" = {m.Id})
                 ON CONFLICT ("ReceivedMessageId") DO NOTHING
                 """, ct);
         }

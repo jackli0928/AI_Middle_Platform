@@ -30,32 +30,32 @@ internal static class SessionTests
         check(received.Single() == "first" && session.IsReady, "接收回调与发送回执并行分发，支持分片和未知请求回执");
         check(heartbeats > 0 && socket.Commands.Contains("ping"), "后台心跳匹配回执并保持连接");
         var quoteId = Guid.NewGuid();
-        var started = await session.StartQuoteStreamAsync(quoteId, "quote-callback", default);
-        var progress = await session.UpdateQuoteStreamAsync(quoteId, "正在查询运价…", false, default);
-        var finished = await session.UpdateQuoteStreamAsync(quoteId, "测试报价", true, default);
+        var started = await session.StartReplyStreamAsync(quoteId, "quote-callback", "已收到询价，正在识别报价条件…", default);
+        var progress = await session.UpdateReplyStreamAsync(quoteId, "正在查询运价…", false, default);
+        var finished = await session.UpdateReplyStreamAsync(quoteId, "测试报价", true, default);
         var frames = socket.Streams.ToArray();
         check(started?.Ok == true && progress?.Ok == true && finished?.Ok == true && frames.Length == 3
             && frames.All(x => x.RequestId == "quote-callback" && x.StreamId == frames[0].StreamId)
             && frames.Select(x => x.Content).SequenceEqual(new[] { "已收到询价，正在识别报价条件…", "正在查询运价…", "测试报价" })
             && !frames[0].Finish && !frames[1].Finish && frames[2].Finish,
             "报价进度沿原回调请求和同一流 ID 更新，最终帧原位结束");
-        check(await session.UpdateQuoteStreamAsync(quoteId, "重复结果", true, default) is null && socket.Streams.Count == 3,
+        check(await session.UpdateReplyStreamAsync(quoteId, "重复结果", true, default) is null && socket.Streams.Count == 3,
             "已结束的流式回复不可重复提交");
         socket.DropStreamAck = true;
         var uncertainQuote = Guid.NewGuid();
-        var uncertainStart = await session.StartQuoteStreamAsync(uncertainQuote, "uncertain-callback", default);
+        var uncertainStart = await session.StartReplyStreamAsync(uncertainQuote, "uncertain-callback", "已收到询价，正在识别报价条件…", default);
         check(uncertainStart?.Stage == "stream-unknown", "流式占位回执超时保留未确认状态");
         socket.DropStreamAck = false;
-        var recovered = await session.UpdateQuoteStreamAsync(uncertainQuote, "最终报价", true, default);
+        var recovered = await session.UpdateReplyStreamAsync(uncertainQuote, "最终报价", true, default);
         check(recovered?.Ok == true && socket.Streams.Last().RequestId == "uncertain-callback",
             "占位回执不确定时仍尝试在原消息交付最终报价");
         socket.DropStreamAck = true;
         var unknownFinalId = Guid.NewGuid();
-        await session.StartQuoteStreamAsync(unknownFinalId, "final-callback", default);
-        var unknownFinal = await session.UpdateQuoteStreamAsync(unknownFinalId, "未确认报价", true, default);
+        await session.StartReplyStreamAsync(unknownFinalId, "final-callback", "已收到询价，正在识别报价条件…", default);
+        var unknownFinal = await session.UpdateReplyStreamAsync(unknownFinalId, "未确认报价", true, default);
         var streamCount = socket.Streams.Count;
         check(unknownFinal?.Stage == "stream-unknown"
-            && await session.UpdateQuoteStreamAsync(unknownFinalId, "重复报价", true, default) is null
+            && await session.UpdateReplyStreamAsync(unknownFinalId, "重复报价", true, default) is null
             && socket.Streams.Count == streamCount, "最终流式回执不确定时不重复提交报价");
         socket.DropStreamAck = false;
         socket.DropSendAck = true;
@@ -80,9 +80,9 @@ internal static class SessionTests
         var failedGroup = await failed.SendAsync("group", "group", "test", default);
         check(!failedGroup.Ok && failedGroup.Errcode == 93006 && failedGroup.Message.Contains("群聊会话无效") && !failedGroup.Errmsg!.Contains("test-secret"), "群聊业务错误、错误码与回执脱敏保持有效");
         var rejectedId = Guid.NewGuid();
-        var rejectedStream = await failed.StartQuoteStreamAsync(rejectedId, "rejected-callback", default);
+        var rejectedStream = await failed.StartReplyStreamAsync(rejectedId, "rejected-callback", "已收到询价，正在识别报价条件…", default);
         check(rejectedStream?.Stage == "stream-rejected" && rejectedStream.Errcode == 93006
-            && await failed.UpdateQuoteStreamAsync(rejectedId, "结果", true, default) is null,
+            && await failed.UpdateReplyStreamAsync(rejectedId, "结果", true, default) is null,
             "企微明确拒绝流式占位后清理状态，报价可走原发送通道");
         failedStop.Cancel(); try { await failedRunning; } catch (OperationCanceledException) { }
         var silent = new PersistentSocket { DropHeartbeatAck = true };

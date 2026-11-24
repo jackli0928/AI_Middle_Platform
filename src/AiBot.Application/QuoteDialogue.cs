@@ -135,7 +135,7 @@ public static class QuoteDialogue
 
         var missing = Required.Where(x => !state.Fields.ContainsKey(x) && !(x == "volume" && dimensionClarification is not null)).Select(x => x switch
         {
-            "destination" => "目的地机场", "piece" => "总件数", "gross_weight" => "总毛重（kg）", _ => "总体积（m³）或完整尺寸、单位和各组件数"
+            "destination" => "目的地机场", "piece" => "总件数", "gross_weight" => "总毛重（kg）", _ => "总体积（m³）或完整尺寸和各组件数"
         }).ToArray();
         if (missing.Length > 0 || dimensionClarification is not null || state.OriginNeedsConfirmation)
             return Question(state, string.Join("、", missing.Append(dimensionClarification)

@@ -1,0 +1,39 @@
+@using AiBot.Web.Controllers
+@model TrackingSubscriptionPage
+@{ ViewData["Module"] = "轨迹监测"; ViewData["Title"] = "订阅管理"; }
+<div class="page-heading">
+    <div><h1>轨迹监测</h1><p>查看企微登记的轨迹跟踪和异常监控订阅。</p></div>
+    <a class="button secondary" asp-action="Operations">操作记录</a>
+</div>
+<section class="panel">
+    <div class="panel-heading">
+        <form asp-action="Index" method="get" class="inbox-filters">
+            <div class="field"><label for="tracking-awb">主单号</label><input id="tracking-awb" name="awb" value="@Model.Awb" placeholder="545-98910626" maxlength="12" /></div>
+            <button class="button primary" type="submit">查询</button>
+            <a class="button secondary" asp-action="Index">重置</a>
+        </form>
+    </div>
+    @if (!Model.CanRefresh)
+    {
+        <p class="inset muted">回执同步待配置。配置轨迹接口凭证和已验证的回执成功码后开始同步。</p>
+    }
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>主单号</th><th>订阅类型</th><th>配置的收件邮箱</th><th>企微发起人</th><th>状态</th><th>更新时间</th><th>最近查询</th></tr></thead>
+            <tbody>
+            @foreach (var item in Model.Subscriptions.Items)
+            {
+                <tr>
+                    <td><a class="text-link mono" asp-action="Nodes" asp-route-awb="@item.Awb">@item.Awb</a></td>
+                    <td>@item.Type</td><td>@item.Email</td><td>@item.SenderUserId</td>
+                    <td>@(item.Status switch { "active" => "已订阅", "cancelled" => "已取消", "subscribe_unknown" => "订阅待核实", "cancel_unknown" => "取消待核实", _ => item.Status })</td>
+                    <td>@Display.FullTime(item.UpdatedAt)</td>
+                    <td>@(Model.Refreshes.TryGetValue(item.Awb, out var refresh) ? Display.FullTime(refresh.QueriedAt) : "尚未查询")</td>
+                </tr>
+            }
+            @if (Model.Subscriptions.Items.Count == 0) { <tr><td colspan="7">暂无订阅记录。</td></tr> }
+            </tbody>
+        </table>
+    </div>
+    <partial name="_Pager" model="@(new TrackingPager(Model.Subscriptions.Page, Model.Subscriptions.PageSize, Model.Subscriptions.Total, "Index", Model.Awb))" />
+</section>

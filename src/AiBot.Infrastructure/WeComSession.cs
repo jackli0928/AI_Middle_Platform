@@ -20,7 +20,7 @@ internal sealed class WeComSession(WebSocket socket, string botId, string secret
     private readonly SemaphoreSlim wireGate = new(1, 1);
     private readonly SemaphoreSlim messageGate = new(1, 1);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<(int Code, string Message)>> pending = new();
-    private readonly ConcurrentDictionary<Guid, QuoteStream> quoteStreams = new();
+    private readonly ConcurrentDictionary<Guid, ReplyStream> replyStreams = new();
     private readonly Channel<JsonElement> callbacks = Channel.CreateBounded<JsonElement>(new BoundedChannelOptions(64) { SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     private CancellationToken lifetime;
     private volatile bool ready;
@@ -76,44 +76,44 @@ internal sealed class WeComSession(WebSocket socket, string botId, string secret
         }
         finally { messageGate.Release(); }
     }
-    public async Task<SendResult?> StartQuoteStreamAsync(Guid messageId, string callbackRequestId, CancellationToken ct)
+    public async Task<SendResult?> StartReplyStreamAsync(Guid messageId, string callbackRequestId, string content, CancellationToken ct)
     {
         if (!ready || string.IsNullOrWhiteSpace(callbackRequestId) || Encoding.UTF8.GetByteCount(callbackRequestId) > 256)
             return null;
-        var stream = new QuoteStream(callbackRequestId);
+        var stream = new ReplyStream(callbackRequestId);
         await stream.Gate.WaitAsync(ct);
-        if (!quoteStreams.TryAdd(messageId, stream)) { stream.Gate.Release(); return null; }
+        if (!replyStreams.TryAdd(messageId, stream)) { stream.Gate.Release(); return null; }
         try
         {
-            var result = await SendQuoteStreamAsync(stream, "已收到询价，正在识别报价条件…", false, ct);
+            var result = await SendReplyStreamAsync(stream, content, false, ct);
             // An uncertain acknowledgement may still have created the placeholder.
             // Keep its identity so the final result updates that message if possible.
             stream.Started = result.Ok || result.Stage == "stream-unknown";
-            if (!stream.Started) quoteStreams.TryRemove(messageId, out _);
+            if (!stream.Started) replyStreams.TryRemove(messageId, out _);
             return result;
         }
         finally { stream.Gate.Release(); }
     }
-    public async Task<SendResult?> UpdateQuoteStreamAsync(Guid messageId, string content, bool finish, CancellationToken ct)
+    public async Task<SendResult?> UpdateReplyStreamAsync(Guid messageId, string content, bool finish, CancellationToken ct)
     {
-        if (!quoteStreams.TryGetValue(messageId, out var stream)) return null;
+        if (!replyStreams.TryGetValue(messageId, out var stream)) return null;
         await stream.Gate.WaitAsync(ct);
         try
         {
             if (!stream.Started || stream.Finished || !ready || DateTimeOffset.UtcNow - stream.CreatedAt >= TimeSpan.FromMinutes(5))
             {
-                quoteStreams.TryRemove(messageId, out _);
+                replyStreams.TryRemove(messageId, out _);
                 return null;
             }
             // A terminal frame is never retried after an uncertain receipt.
             if (finish) stream.Finished = true;
-            var result = await SendQuoteStreamAsync(stream, content, finish, ct);
-            if (finish || result.Stage == "stream-rejected") quoteStreams.TryRemove(messageId, out _);
+            var result = await SendReplyStreamAsync(stream, content, finish, ct);
+            if (finish || result.Stage == "stream-rejected") replyStreams.TryRemove(messageId, out _);
             return result;
         }
         finally { stream.Gate.Release(); }
     }
-    private async Task<SendResult> SendQuoteStreamAsync(QuoteStream stream, string content, bool finish, CancellationToken ct)
+    private async Task<SendResult> SendReplyStreamAsync(ReplyStream stream, string content, bool finish, CancellationToken ct)
     {
         if (Encoding.UTF8.GetByteCount(content) > 20480) throw new ArgumentException("流式回复超出企微长度限制。", nameof(content));
         var attempted = false;
@@ -131,7 +131,7 @@ internal sealed class WeComSession(WebSocket socket, string botId, string secret
                 : new(false, "stream-offline", "机器人连接不可用，流式回复未提交。", stream.StreamId);
         }
     }
-    private sealed class QuoteStream(string requestId)
+    private sealed class ReplyStream(string requestId)
     {
         public string RequestId { get; } = requestId;
         public string StreamId { get; } = "stream_" + Guid.NewGuid().ToString("N");
@@ -162,8 +162,8 @@ internal sealed class WeComSession(WebSocket socket, string botId, string secret
         using var timer = new PeriodicTimer(settings.HeartbeatInterval);
         while (await timer.WaitForNextTickAsync(ct))
         {
-            foreach (var item in quoteStreams)
-                if (DateTimeOffset.UtcNow - item.Value.CreatedAt >= TimeSpan.FromMinutes(5)) quoteStreams.TryRemove(item.Key, out _);
+            foreach (var item in replyStreams)
+                if (DateTimeOffset.UtcNow - item.Value.CreatedAt >= TimeSpan.FromMinutes(5)) replyStreams.TryRemove(item.Key, out _);
             await checkLease(ct);
             var receipt = await RequestAsync("ping", "ping_" + Guid.NewGuid().ToString("N"), null, ct);
             if (receipt.Code != 0) throw new WebSocketException("Heartbeat rejected.");

@@ -12,6 +12,12 @@ public sealed class QuoteMcpInputException(IReadOnlyList<string> missingFields) 
     public IReadOnlyList<string> MissingFields { get; } = missingFields;
 }
 
+public sealed class QuoteMcpUpstreamException(string status, bool transient) : Exception("报价 MCP 上游接口不可用。")
+{
+    public string Status { get; } = status;
+    public bool Transient { get; } = transient;
+}
+
 public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration)
 {
     public bool Configured => !string.IsNullOrWhiteSpace(configuration["QuoteMcp:ToolName"])
@@ -52,7 +58,15 @@ public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration
             return json;
         }
 
-        if (configuration["QuoteMcp:Transport"] == "stdio") return await QuoteStdioAsync(tool, arguments, deadline.Token);
+        if (configuration["QuoteMcp:Transport"] == "stdio")
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try { return await QuoteStdioAsync(tool, arguments, deadline.Token); }
+                catch (QuoteMcpUpstreamException ex) when (ex.Transient && attempt == 0 && !deadline.IsCancellationRequested)
+                { await Task.Delay(TimeSpan.FromMilliseconds(500), deadline.Token); }
+            }
+        }
         using (await CallAsync("initialize", new { protocolVersion = "2025-03-26", capabilities = new { }, clientInfo = new { name = "Li.AiBot", version = "1.0" } })) { }
         using (var notification = new HttpRequestMessage(HttpMethod.Post, url))
         {
@@ -157,6 +171,16 @@ public sealed class QuoteMcpClient(HttpClient http, IConfiguration configuration
                         .Where(x => x is "destination" or "piece" or "gross_weight" or "volume" or "all_content").Distinct().ToArray()
                     : [];
                 throw new QuoteMcpInputException(missing);
+            }
+            if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("status", out var upstreamStatus)
+                && upstreamStatus.ValueKind == JsonValueKind.String)
+            {
+                var code = upstreamStatus.GetString()!;
+                var transient = code is "connection_error" or "timeout";
+                if (code == "http_error" && data.TryGetProperty("httpStatus", out var httpStatus)
+                    && httpStatus.ValueKind == JsonValueKind.Number && httpStatus.TryGetInt32(out var statusCode))
+                    transient = statusCode == 429 || statusCode >= 500;
+                throw new QuoteMcpUpstreamException(code, transient);
             }
         }
         catch (JsonException) { /* Malformed tool errors are reported without copying provider content. */ }

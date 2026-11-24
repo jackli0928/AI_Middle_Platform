@@ -28,7 +28,7 @@ public static class QuoteVolumeResolver
         var matches = Triples.Matches(content).Cast<Match>().Concat(TriplesWithUnits.Matches(content).Cast<Match>())
             .Concat(Labelled.Matches(content).Cast<Match>())
             .OrderBy(x => x.Index).ToArray();
-        if (matches.Length == 0) return Incomplete(extractedPieces, "完整长宽高、尺寸单位及各组件数");
+        if (matches.Length == 0) return Incomplete(extractedPieces, "完整长宽高及各组件数");
         var clauses = Regex.Matches(content, @"[^，,；;\n]+", Options).Cast<Match>();
         if (clauses.Any(clause => DimensionHint.IsMatch(clause.Value) && clause.Value.Any(char.IsDigit)
             && !matches.Any(x => x.Index >= clause.Index && x.Index + x.Length <= clause.Index + clause.Length)))
@@ -42,10 +42,11 @@ public static class QuoteVolumeResolver
             var units = new[] { match.Groups["lu"].Value, match.Groups["wu"].Value, match.Groups["hu"].Value };
             if (units.All(string.IsNullOrEmpty)) units = [match.Groups["unit"].Value, match.Groups["unit"].Value, match.Groups["unit"].Value];
             var specified = units.Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (specified.Length == 0 || units.Any(x => x.Length == 0) && specified.Length > 1)
+            if (units.Any(x => x.Length == 0) && specified.Length > 1)
                 return Incomplete(extractedPieces, "明确的尺寸单位（mm、cm 或 m）");
+            var fallbackUnit = specified.Length == 0 ? "cm" : specified[0];
             var lengths = new[] { "l", "w", "h" }.Select((name, index) =>
-                double.Parse(match.Groups[name].Value, CultureInfo.InvariantCulture) * UnitFactor(units[index].Length > 0 ? units[index] : specified[0])).ToArray();
+                double.Parse(match.Groups[name].Value, CultureInfo.InvariantCulture) * UnitFactor(units[index].Length > 0 ? units[index] : fallbackUnit)).ToArray();
             var volume = lengths.Aggregate(1d, (value, side) => value * side);
             if (lengths.Any(x => !double.IsFinite(x) || x <= 0) || !double.IsFinite(volume) || volume <= 0)
                 return Incomplete(extractedPieces, "有效的长宽高尺寸");

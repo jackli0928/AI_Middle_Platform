@@ -15,7 +15,7 @@ public sealed class RobotsController(IRobotService service, IAutomationSettingsS
     {
         if (id is null) return await EditView(new RobotInput(), ct);
         var robot = await service.FindAsync(id.Value, ct);
-        return robot is null ? NotFound() : await EditView(new RobotInput { Id = robot.Id, Name = robot.Name, BotId = robot.BotId, Description = robot.Description, Enabled = robot.Enabled, AutoReplyEnabled = robot.AutoReplyEnabled, ReplyMode = robot.ReplyMode, ReplyToGroups = robot.ReplyToGroups, ReplyPrompt = robot.ReplyPrompt, ModelPriority = robot.ModelPriority.ToList() }, ct);
+        return robot is null ? NotFound() : await EditView(new RobotInput { Id = robot.Id, Name = robot.Name, BotId = robot.BotId, Description = robot.Description, Enabled = robot.Enabled, TrackingModelId = robot.TrackingModelId, AutoReplyEnabled = robot.AutoReplyEnabled, ReplyMode = robot.ReplyMode, ReplyToGroups = robot.ReplyToGroups, ReplyPrompt = robot.ReplyPrompt, ModelPriority = robot.ModelPriority.ToList() }, ct);
     }
     private async Task<IActionResult> EditView(RobotInput input, CancellationToken ct)
     { ViewBag.AiModels = await settings.ModelsAsync(ct); return View("Edit", input); }

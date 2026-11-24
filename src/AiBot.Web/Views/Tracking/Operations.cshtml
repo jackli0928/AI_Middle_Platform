@@ -1,0 +1,32 @@
+@using AiBot.Web.Controllers
+@model PageResult<TrackingOperation>
+@{ ViewData["Module"] = "轨迹监测"; ViewData["Title"] = "轨迹操作记录"; }
+<div class="page-heading">
+    <div><h1>轨迹操作记录</h1><p>核对自然语言指令、识别参数和业务执行结果。</p></div>
+    <a class="button secondary" asp-action="Index">订阅管理</a>
+</div>
+<section class="panel">
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>时间</th><th>机器人和发起人</th><th>指令</th><th>识别结果</th><th>执行结果</th></tr></thead>
+            <tbody>
+            @foreach (var item in Model.Items)
+            {
+                var command = item.Command;
+                var status = command.Status switch
+                {
+                    "queued" => "排队中", "processing" => "处理中", "succeeded" => "成功",
+                    "failed" => "失败", "unknown" => "待核实", "clarify" => "待补参数", "partial" => "部分成功",
+                    "help" => "用法咨询", _ => command.Status
+                };
+                <tr><td>@Display.FullTime(command.CreatedAt)</td><td>@item.RobotName<br />@command.SenderUserId</td>
+                    <td class="message-cell"><details><summary>@(item.Text.Length > 48 ? item.Text[..48] + "…" : item.Text)</summary><p>@item.Text</p></details></td>
+                    <td class="message-cell">@if (command.Intent.Length > 0) { <details><summary>查看参数</summary><p>@command.Intent</p></details> }</td>
+                    <td><strong>@status</strong><br />@command.Result</td></tr>
+            }
+            @if (Model.Items.Count == 0) { <tr><td colspan="5">暂无操作记录。</td></tr> }
+            </tbody>
+        </table>
+    </div>
+    <partial name="_Pager" model="@(new TrackingPager(Model.Page, Model.PageSize, Model.Total, "Operations"))" />
+</section>

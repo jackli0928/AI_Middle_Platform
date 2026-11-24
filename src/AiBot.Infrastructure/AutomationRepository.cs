@@ -18,7 +18,7 @@ public sealed class AutomationRepository(BotDbContext db) : IAutomationRepositor
     public Task<AiModelEndpoint?> ModelByIdAsync(Guid id, CancellationToken ct) => db.AiModels.SingleOrDefaultAsync(x => x.Id == id, ct);
     public Task<Robot?> RobotAsync(Guid id, CancellationToken ct) => db.Robots.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);
     public async Task<bool> ModelInUseAsync(Guid id, CancellationToken ct)
-    { var configs = await db.Robots.AsNoTracking().ToListAsync(ct); return configs.Any(x => x.GetModelPriority().Contains(id)); }
+    { var configs = await db.Robots.AsNoTracking().ToListAsync(ct); return configs.Any(x => x.GetModelPriority().Contains(id) || x.TrackingModelId == id); }
     public void Add(KnowledgeEntry x) => db.KnowledgeEntries.Add(x);
     public void Remove(KnowledgeEntry x) => db.KnowledgeEntries.Remove(x);
     public void Add(AiModelEndpoint x) => db.AiModels.Add(x);

@@ -1,0 +1,47 @@
+@model PageResult<TrackingPush>
+@{
+    ViewData["Module"] = "轨迹监测";
+    ViewData["Title"] = "主单推送记录";
+    var awb = (string)ViewBag.Awb;
+    var refresh = ViewBag.Refresh as TrackingRefresh;
+}
+<div class="page-heading">
+    <div><h1>主单 @awb</h1><p>打开主单时查询最新邮件推送记录，推送时间按接口原值展示。</p></div>
+    <a class="button secondary" asp-action="Index" asp-route-awb="@awb">查看订阅</a>
+</div>
+<section class="panel">
+    <div class="panel-heading">
+        <div><h2>推送节点</h2>
+            <p>@(refresh is null ? "尚未查询回执接口。" : $"最近查询 {Display.FullTime(refresh.QueriedAt)} · {refresh.Result}")</p>
+            @if (ViewBag.SyncNotice is string notice)
+            {
+                <p role="status">@notice</p>
+            }
+        </div>
+        <form asp-action="Refresh" method="post">
+            <input type="hidden" name="awb" value="@awb" />
+            <button class="button secondary" disabled="@(!(bool)ViewBag.CanRefresh)">立即刷新</button>
+        </form>
+    </div>
+    <form class="inbox-filters" asp-action="Nodes" method="get">
+        <input type="hidden" name="awb" value="@awb" />
+        <input type="hidden" name="cached" value="true" />
+        <div class="field"><label for="tracking-from">起始日期</label><input type="date" id="tracking-from" name="from" value="@ViewBag.From" /></div>
+        <div class="field"><label for="tracking-to">结束日期</label><input type="date" id="tracking-to" name="to" value="@ViewBag.To" /></div>
+        <button class="button primary" type="submit">筛选</button>
+    </form>
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>推送节点</th><th>邮件推送时间</th><th>中台发现时间</th><th>轨迹链接</th></tr></thead>
+            <tbody>
+            @foreach (var item in Model.Items)
+            {
+                <tr><td>@item.Node</td><td>@item.PushTime</td><td>@Display.FullTime(item.DetectedAt)</td>
+                    <td>@if (item.QueryAddress is { } address) { <a class="text-link" href="@address" target="_blank" rel="noopener noreferrer">查看轨迹</a> }</td></tr>
+            }
+            @if (Model.Items.Count == 0) { <tr><td colspan="4">暂无推送记录。</td></tr> }
+            </tbody>
+        </table>
+    </div>
+    <partial name="_Pager" model="@(new TrackingPager(Model.Page, Model.PageSize, Model.Total, "Nodes", awb, ViewBag.From as string, ViewBag.To as string, Cached: true))" />
+</section>

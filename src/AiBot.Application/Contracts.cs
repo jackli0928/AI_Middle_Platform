@@ -5,6 +5,7 @@ namespace AiBot.Application;
 
 public sealed record RobotInfo(Guid Id, string Name, string BotId, string Description, bool Enabled, DateTimeOffset UpdatedAt)
 {
+    public Guid? TrackingModelId { get; init; }
     public bool AutoReplyEnabled { get; init; }
     public string ReplyMode { get; init; } = "knowledge";
     public bool ReplyToGroups { get; init; } = true;
@@ -19,6 +20,7 @@ public sealed class RobotInput
     [StringLength(512, MinimumLength = 1)] public string? Secret { get; set; }
     [StringLength(500), DisplayFormat(ConvertEmptyStringToNull = false)] public string Description { get; set; } = "";
     public bool Enabled { get; set; } = true;
+    public Guid? TrackingModelId { get; set; }
     public bool AutoReplyEnabled { get; set; }
     public string ReplyMode { get; set; } = "knowledge";
     public bool ReplyToGroups { get; set; } = true;
@@ -51,6 +53,7 @@ public interface IRobotService
     Task SaveAsync(RobotInput input, CancellationToken ct);
     Task DeleteAsync(Guid id, CancellationToken ct);
     Task<SendResult> SendAsync(SendInput input, string actor, CancellationToken ct);
+    Task<SendResult> ReplyAsync(ReceivedMessage message, string content, string actor, CancellationToken ct);
     Task<Dashboard> DashboardAsync(CancellationToken ct);
     Task<PageResult<MessageLog>> LogsAsync(int page, string? search, CancellationToken ct);
 }
@@ -68,7 +71,11 @@ public interface IRobotRepository
     Task<PageResult<MessageLog>> LogsAsync(int page, string? search, CancellationToken ct);
 }
 public interface ISecretProtector { string Protect(string value); string Unprotect(string value); }
-public interface IWeComGateway { Task<SendResult> SendAsync(string botId, string secret, string targetType, string targetId, string content, CancellationToken ct); }
+public interface IWeComGateway
+{
+    Task<SendResult> SendAsync(string botId, string secret, string targetType, string targetId, string content, CancellationToken ct);
+    Task<SendResult?> UpdateReplyStreamAsync(string botId, string secret, Guid messageId, string content, bool finish, CancellationToken ct);
+}
 public interface IAccountService
 {
     Task<AdminUser?> AuthenticateAsync(string username, string password, CancellationToken ct);

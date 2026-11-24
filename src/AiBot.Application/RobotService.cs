@@ -5,7 +5,7 @@ namespace AiBot.Application;
 
 public sealed class RobotService(IRobotRepository repository, ISecretProtector secrets, IWeComGateway gateway, IAutomationRepository automation) : IRobotService
 {
-    private static RobotInfo Map(Robot r) => new(r.Id, r.Name, r.BotId, r.Description, r.Enabled, r.UpdatedAt) { AutoReplyEnabled = r.AutoReplyEnabled, ReplyMode = r.ReplyMode, ReplyToGroups = r.ReplyToGroups, ReplyPrompt = r.ReplyPrompt, ModelPriority = r.GetModelPriority() };
+    private static RobotInfo Map(Robot r) => new(r.Id, r.Name, r.BotId, r.Description, r.Enabled, r.UpdatedAt) { TrackingModelId = r.TrackingModelId, AutoReplyEnabled = r.AutoReplyEnabled, ReplyMode = r.ReplyMode, ReplyToGroups = r.ReplyToGroups, ReplyPrompt = r.ReplyPrompt, ModelPriority = r.GetModelPriority() };
     public async Task<IReadOnlyList<RobotInfo>> ListAsync(string? search, CancellationToken ct) => (await repository.ListAsync(search, ct)).Select(Map).ToList();
     public async Task<RobotInfo?> FindAsync(Guid id, CancellationToken ct) => await repository.FindAsync(id, ct) is { } r ? Map(r) : null;
     public async Task SaveAsync(RobotInput input, CancellationToken ct)
@@ -18,15 +18,20 @@ public sealed class RobotService(IRobotRepository repository, ISecretProtector s
         if (priorities.Any(id => models.All(x => x.Id != id))) throw new ArgumentException("优先级列表中包含不存在的模型，请重新选择。");
         if (input.AutoReplyEnabled && input.ReplyMode == "ai" && !models.Any(x => priorities.Contains(x.Id) && x.Enabled)) throw new ArgumentException("请至少选择一个已启用且已配置密钥的 AI 模型。");
         if (input.AutoReplyEnabled && input.ReplyMode == "quote" && priorities.Count > 0 && !models.Any(x => priorities.Contains(x.Id) && x.Enabled)) throw new ArgumentException("所选报价字段提取模型不可用。");
+        if (input.TrackingModelId is { } trackingModelId &&
+            !models.Any(x => x.Id == trackingModelId && x.Enabled && x.ProtectedApiKey.Length > 0))
+            throw new ArgumentException("请选择已启用且已配置密钥的轨迹意图模型。");
         if (input.Id is { } id)
         {
             var robot = await repository.FindAsync(id, ct) ?? throw new ArgumentException("机器人不存在或已被删除。");
             robot.Update(input.Name, input.BotId, protectedSecret, input.Description, input.Enabled);
+            robot.ConfigureTracking(input.TrackingModelId);
             robot.ConfigureAutoReply(input.AutoReplyEnabled, input.ReplyMode, input.ReplyToGroups, input.ReplyPrompt, priorities);
         }
         else
         {
             var robot = Robot.Create(input.Name, input.BotId, protectedSecret ?? "", input.Description, input.Enabled);
+            robot.ConfigureTracking(input.TrackingModelId);
             robot.ConfigureAutoReply(input.AutoReplyEnabled, input.ReplyMode, input.ReplyToGroups, input.ReplyPrompt, priorities); repository.Add(robot);
         }
         await repository.SaveAsync(ct);
@@ -36,7 +41,21 @@ public sealed class RobotService(IRobotRepository repository, ISecretProtector s
         var robot = await repository.FindAsync(id, ct) ?? throw new ArgumentException("机器人不存在或已被删除。");
         repository.Remove(robot); await repository.SaveAsync(ct);
     }
-    public async Task<SendResult> SendAsync(SendInput input, string actor, CancellationToken ct)
+    public Task<SendResult> SendAsync(SendInput input, string actor, CancellationToken ct) =>
+        SendCoreAsync(input, actor, null, ct);
+
+    public Task<SendResult> ReplyAsync(ReceivedMessage message, string content, string actor, CancellationToken ct) =>
+        SendCoreAsync(new SendInput
+        {
+            OperationId = message.Id,
+            RobotId = message.RobotId,
+            TargetType = message.ChatType,
+            UserId = message.SenderUserId,
+            ChatId = message.ChatId,
+            Content = content
+        }, actor, message.Id, ct);
+
+    private async Task<SendResult> SendCoreAsync(SendInput input, string actor, Guid? replyTo, CancellationToken ct)
     {
         if (input.TargetType is not ("single" or "group")) throw new ArgumentException("请选择单聊或群聊。");
         var target = input.GetTargetId();
@@ -52,12 +71,17 @@ public sealed class RobotService(IRobotRepository repository, ISecretProtector s
         if (!await repository.TryStartMessageAsync(log, ct))
             return new(false, "duplicate", "这次发送已提交，请查看消息记录，避免重复发送。");
         SendResult result;
-        try { result = await gateway.SendAsync(robot.BotId, secret, input.TargetType, target, input.Content, ct); }
+        try
+        {
+            result = replyTo is { } messageId
+                ? await gateway.SendReplyAsync(robot.BotId, secret, messageId, input.TargetType, target, input.Content, ct)
+                : await gateway.SendAsync(robot.BotId, secret, input.TargetType, target, input.Content, ct);
+        }
         catch (OperationCanceledException)
         { result = new(false, "unknown", "请求已取消，发送结果未确认。请查看企微会话，避免重复发送。"); }
         catch
         { result = new(false, "unknown", "发送结果未确认。请检查企微会话后再操作。"); }
-        var status = result.Ok ? DeliveryStatus.Accepted : result.Stage is "unknown" or "send-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
+        var status = result.Ok ? DeliveryStatus.Accepted : result.Stage is "unknown" or "send-unknown" or "stream-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
         log.Complete(status, result.Message, result.RequestId, result.Errcode);
         // Persist the receipt even if the browser disconnected. A pending log must not imply failure.
         using var saveDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));

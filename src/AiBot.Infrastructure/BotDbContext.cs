@@ -13,9 +13,37 @@ public sealed class BotDbContext(DbContextOptions<BotDbContext> options) : DbCon
     public DbSet<AiModelEndpoint> AiModels => Set<AiModelEndpoint>();
     public DbSet<AutoReplyLog> AutoReplies => Set<AutoReplyLog>();
     public DbSet<QuoteDraft> QuoteDrafts => Set<QuoteDraft>();
+    public DbSet<TrackingCommand> TrackingCommands => Set<TrackingCommand>();
+    public DbSet<TrackingSubscription> TrackingSubscriptions => Set<TrackingSubscription>();
+    public DbSet<TrackingPush> TrackingPushes => Set<TrackingPush>();
+    public DbSet<TrackingRefresh> TrackingRefreshes => Set<TrackingRefresh>();
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.HasDefaultSchema("ai_bot");
+        model.Entity<TrackingCommand>(b =>
+        {
+            b.ToTable("tracking_commands");
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => new { x.Status, x.CreatedAt });
+            b.HasIndex(x => new { x.RobotId, x.SenderUserId, x.CreatedAt });
+        });
+        model.Entity<TrackingSubscription>(b =>
+        {
+            b.ToTable("tracking_subscriptions");
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => new { x.Awb, x.Email, x.Type }).IsUnique();
+            b.HasIndex(x => new { x.Status, x.Awb });
+        });
+        model.Entity<TrackingPush>(b =>
+        {
+            b.ToTable("tracking_pushes");
+            b.HasKey(x => new { x.Awb, x.PushTime, x.Node });
+        });
+        model.Entity<TrackingRefresh>(b =>
+        {
+            b.ToTable("tracking_refreshes");
+            b.HasKey(x => x.Awb);
+        });
         model.Entity<KnowledgeEntry>(b => {
             b.ToTable("knowledge_entries"); b.HasKey(x => x.Id);
             b.Property(x => x.Question).HasMaxLength(300); b.Property(x => x.Keywords).HasMaxLength(2000);

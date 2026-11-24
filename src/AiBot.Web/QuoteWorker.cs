@@ -200,7 +200,8 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
         }
         catch (Exception ex)
         {
-            logger.LogWarning("报价任务 {Id} 在 {Stage} 阶段异常（{Type}）。", id, stage, ex.GetType().Name);
+            logger.LogWarning("报价任务 {Id} 在 {Stage} 阶段异常（{Type}，{Status}）。", id, stage,
+                ex.GetType().Name, ex is QuoteMcpUpstreamException upstream ? upstream.Status : "unknown");
             var detail = submitted ? "发送结果待核实，请检查企微会话。" : "报价查询失败，本次未发送。";
             outgoing?.Complete(DeliveryStatus.Unknown, detail, null, null);
             if (!submitted && outgoing is null && message is not null && robot is not null && !ct.IsCancellationRequested)
@@ -211,7 +212,9 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
                     if (current is { Enabled: true, AutoReplyEnabled: true, ReplyMode: "quote" }
                         && (message.ChatType == "single" || current.ReplyToGroups))
                     {
-                        answer = "报价查询暂时无法完成，请稍后重新发送询价。";
+                        answer = ex is QuoteMcpUpstreamException { Status: "connection_error" or "timeout" }
+                            ? "报价接口连接暂时不稳定，请稍后重新发送询价。"
+                            : "报价查询暂时无法完成，请稍后重新发送询价。";
                         var target = message.ChatType == "group" ? message.ChatId : message.SenderUserId;
                         outgoing = new MessageLog(log.Id, current, target, answer, "自动回复·报价", message.ChatType);
                         db.Messages.Add(outgoing);
@@ -247,14 +250,14 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
             deadline.CancelAfter(TimeSpan.FromSeconds(2));
             using var scope = scopes.CreateScope();
             var secret = scope.ServiceProvider.GetRequiredService<ISecretProtector>().Unprotect(robot.ProtectedSecret);
-            await gateway.UpdateQuoteStreamAsync(robot.BotId, secret, message.Id, content, false, deadline.Token);
+            await gateway.UpdateReplyStreamAsync(robot.BotId, secret, message.Id, content, false, deadline.Token);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         { logger.LogInformation("报价消息 {MessageId} 的进度更新未完成（{Type}）。", message.Id, ex.GetType().Name); }
     }
     private async Task<SendResult> DeliverAsync(Robot robot, string secret, ReceivedMessage message, string answer, CancellationToken ct)
     {
-        var stream = await gateway.UpdateQuoteStreamAsync(robot.BotId, secret, message.Id, answer, true, ct);
+        var stream = await gateway.UpdateReplyStreamAsync(robot.BotId, secret, message.Id, answer, true, ct);
         if (stream is null)
         {
             // The callback may still be creating the initial placeholder after the quote finishes.
@@ -262,7 +265,7 @@ public sealed class QuoteWorker(IServiceScopeFactory scopes, WeComGateway gatewa
             if (remaining > TimeSpan.Zero)
             {
                 await Task.Delay(remaining, ct);
-                stream = await gateway.UpdateQuoteStreamAsync(robot.BotId, secret, message.Id, answer, true, ct);
+                stream = await gateway.UpdateReplyStreamAsync(robot.BotId, secret, message.Id, answer, true, ct);
             }
         }
         if (stream is { Ok: true } or { Stage: "stream-unknown" }) return stream;

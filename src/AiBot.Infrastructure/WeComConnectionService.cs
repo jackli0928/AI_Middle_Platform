@@ -25,6 +25,7 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
     : BackgroundService, IWeComGateway, IConnectionMonitor
 {
     private readonly ConcurrentDictionary<Guid, Worker> workers = new();
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource> pendingReplyReceipts = new();
     private readonly ConcurrentDictionary<Guid, RobotConnectionState> states = new();
     private readonly ConcurrentDictionary<Guid, byte> restarts = new();
     public IReadOnlyList<RobotConnectionState> GetStates() => states.Values.OrderBy(x => x.RobotName).ToList();
@@ -37,11 +38,14 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
         return session is null ? Task.FromResult(new SendResult(false, "offline", "机器人长连接尚未就绪，请在接收消息页面查看连接状态；刚保存配置时请稍等片刻。"))
             : session.SendAsync(targetType, targetId, content, ct);
     }
-    public Task<SendResult?> UpdateQuoteStreamAsync(string botId, string secret, Guid messageId, string content, bool finish, CancellationToken ct)
+    public async Task<SendResult?> UpdateReplyStreamAsync(string botId, string secret, Guid messageId, string content, bool finish, CancellationToken ct)
     {
         var session = workers.Values.Where(x => x.Robot.BotId == botId).Select(x => Volatile.Read(ref x.Session))
             .FirstOrDefault(x => x is not null && x.Matches(botId, secret));
-        return session is null ? Task.FromResult<SendResult?>(null) : session.UpdateQuoteStreamAsync(messageId, content, finish, ct);
+        if (session is null) return null;
+        if (pendingReplyReceipts.TryGetValue(messageId, out var receipt))
+            await receipt.Task.WaitAsync(ct);
+        return await session.UpdateReplyStreamAsync(messageId, content, finish, ct);
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -149,6 +153,18 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
     {
         var message = IncomingMessageParser.Parse(robot.Id, robot.Name, frame);
         if (message is null) return;
+        var receipt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        pendingReplyReceipts.TryAdd(message.Id, receipt);
+        try { await StoreAndDispatchAsync(robot, message, receipt, ct); }
+        finally
+        {
+            pendingReplyReceipts.TryRemove(message.Id, out _);
+            receipt.TrySetResult();
+        }
+    }
+
+    private async Task StoreAndDispatchAsync(Robot robot, ReceivedMessage message, TaskCompletionSource receipt, CancellationToken ct)
+    {
         var isNew = false;
         for (var attempt = 0; ; attempt++)
         {
@@ -163,40 +179,47 @@ public sealed class WeComGateway(IServiceScopeFactory scopes, ISecretProtector s
             catch (Exception) when (attempt < 2 && !ct.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(attempt + 1), ct); }
         }
         if (!isNew) return;
-        if (message.MessageType == "text" && DateTimeOffset.UtcNow - message.ReceivedAt < TimeSpan.FromSeconds(4))
-        {
-            try
-            {
-                using var scope = scopes.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
-                if (scope.ServiceProvider.GetService<QuoteMcpClient>()?.Configured == true
-                    && await db.AutoReplies.AsNoTracking().AnyAsync(x => x.ReceivedMessageId == message.Id && x.Mode == "quote", ct))
-                {
-                    var session = workers.Values.Where(x => x.Robot.Id == robot.Id).Select(x => Volatile.Read(ref x.Session)).FirstOrDefault(x => x is not null);
-                    if (session is not null && DateTimeOffset.UtcNow - message.ReceivedAt < TimeSpan.FromSeconds(4))
-                    {
-                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        deadline.CancelAfter(TimeSpan.FromSeconds(2));
-                        var result = await session.StartQuoteStreamAsync(message.Id, message.RequestId, deadline.Token);
-                        if (result is { Ok: false }) logger.LogInformation("报价消息 {MessageId} 的企微流式占位未确认（{Stage}）。", message.Id, result.Stage);
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
-            { logger.LogWarning("报价消息 {MessageId} 的流式占位失败（{Type}），保留原主动发送流程。", message.Id, ex.GetType().Name); }
-        }
         try
         {
             using var scope = scopes.CreateScope();
-            var automation = scope.ServiceProvider.GetService<IAutoReplyService>();
-            // Quote messages are queued atomically with the inbox insert. Do not register the same task twice.
             var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
             var quoteQueued = await db.AutoReplies.AsNoTracking()
                 .AnyAsync(x => x.ReceivedMessageId == message.Id && x.Mode == "quote", ct);
-            if (automation is not null && !quoteQueued) await automation.HandleAsync(robot.Id, robot.BotId, message, ct);
+            var trackingQueued = await db.TrackingCommands.AsNoTracking().AnyAsync(x => x.Id == message.Id, ct);
+
+            if (trackingQueued)
+                await TryStartReplyStreamAsync(robot, message, "已收到，正在识别你的指令…", ct);
+            else if (quoteQueued && scope.ServiceProvider.GetService<QuoteMcpClient>()?.Configured == true)
+                await TryStartReplyStreamAsync(robot, message, "已收到询价，正在识别报价条件…", ct);
+
+            // Queued workers can now safely update or finish the receipt. Ordinary reply code also uses that path.
+            receipt.TrySetResult();
+            if (!quoteQueued && !trackingQueued && scope.ServiceProvider.GetService<IAutoReplyService>() is { } automation)
+                await automation.HandleAsync(robot.Id, robot.BotId, message, ct);
         }
         catch (Exception ex) { logger.LogWarning("机器人 {RobotId} 自动回复处理异常（{Type}），收到的消息已保存，不自动重发。", robot.Id, ex.GetType().Name); }
     }
+
+    private async Task TryStartReplyStreamAsync(Robot robot, ReceivedMessage message, string content, CancellationToken ct)
+    {
+        if (DateTimeOffset.UtcNow - message.ReceivedAt >= TimeSpan.FromSeconds(4)) return;
+        var session = workers.GetValueOrDefault(robot.Id) is { } worker ? Volatile.Read(ref worker.Session) : null;
+        if (session is null) return;
+
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(2));
+            var result = await session.StartReplyStreamAsync(message.Id, message.RequestId, content, deadline.Token);
+            if (result is { Ok: false })
+                logger.LogInformation("企微消息 {MessageId} 的流式占位未确认（{Stage}）。", message.Id, result.Stage);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogWarning("企微消息 {MessageId} 的流式占位未完成（{Type}）。", message.Id, ex.GetType().Name);
+        }
+    }
+
     private void SetState(Guid id, string state, string description)
     {
         if (states.TryGetValue(id, out var old)) states[id] = old with { State = state, Description = description };

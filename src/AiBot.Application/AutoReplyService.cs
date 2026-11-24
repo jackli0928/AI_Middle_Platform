@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using AiBot.Domain;
 
 namespace AiBot.Application;
@@ -9,7 +8,7 @@ public sealed class AutoReplyService(IAutomationRepository repository, IRobotRep
     public async Task HandleAsync(Guid robotId, string connectionBotId, ReceivedMessage message, CancellationToken ct)
     {
         var robot = await repository.RobotAsync(robotId, ct);
-        if (robot is null || !robot.Enabled || !robot.AutoReplyEnabled || robot.BotId != connectionBotId || message.SenderUserId == robot.BotId || IsBot(message)
+        if (robot is null || !robot.Enabled || !robot.AutoReplyEnabled || robot.BotId != connectionBotId || message.SenderUserId == robot.BotId || !MessageSender.IsHuman(message)
             || message.ChatType == "group" && !robot.ReplyToGroups || message.MessageType is not ("text" or "voice" or "mixed") || string.IsNullOrWhiteSpace(message.Content.Replace("[图片消息]", "", StringComparison.Ordinal))) return;
         var target = message.ChatType == "group" ? message.ChatId : message.SenderUserId;
         if (target.Length is 0 or > 256 || target == "@all" || target.Any(c => char.IsWhiteSpace(c) || c is '|' or ',' or ';')) return;
@@ -61,8 +60,8 @@ public sealed class AutoReplyService(IAutomationRepository repository, IRobotRep
             outgoing = new MessageLog(log.Id, current, target, answer, current.ReplyMode == "knowledge" ? "自动回复·知识库" : "自动回复·AI", message.ChatType);
             if (!await outbox.TryStartMessageAsync(outgoing, deadline.Token)) { log.Complete("unknown", modelName, answer, "发送标识已存在，不重复提交。", string.Join("\n", attempts)); return; }
             submitted = true;
-            var result = await gateway.SendAsync(current.BotId, secrets.Unprotect(current.ProtectedSecret), message.ChatType, target, answer, deadline.Token);
-            var status = result.Ok ? DeliveryStatus.Accepted : result.Stage is "unknown" or "send-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
+            var result = await gateway.SendReplyAsync(current.BotId, secrets.Unprotect(current.ProtectedSecret), message.Id, message.ChatType, target, answer, deadline.Token);
+            var status = result.Ok ? DeliveryStatus.Accepted : result.Stage is "unknown" or "send-unknown" or "stream-unknown" ? DeliveryStatus.Unknown : DeliveryStatus.Failed;
             outgoing.Complete(status, result.Message, result.RequestId, result.Errcode);
             log.Complete(result.Ok ? "accepted" : status == DeliveryStatus.Unknown ? "unknown" : "failed", modelName, answer, result.Message, string.Join("\n", attempts));
         }
@@ -78,14 +77,6 @@ public sealed class AutoReplyService(IAutomationRepository repository, IRobotRep
             await repository.CompleteAsync(log, save.Token);
             if (outgoing is not null) await outbox.CompleteMessageAsync(outgoing, save.Token);
         }
-    }
-    private static bool IsBot(ReceivedMessage message)
-    {
-        using var json = JsonDocument.Parse(message.PayloadJson);
-        if (!json.RootElement.TryGetProperty("from", out var from) || from.ValueKind != JsonValueKind.Object) return false;
-        return from.TryGetProperty("is_bot", out var bot) && bot.ValueKind == JsonValueKind.True
-            || from.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String && type.GetString() == "bot"
-            || from.TryGetProperty("bot_id", out var id) && id.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(id.GetString());
     }
     public static string LimitUtf8(string value, int limit)
     {

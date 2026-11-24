@@ -12,6 +12,51 @@ public sealed class BotDbContextModelSnapshot : ModelSnapshot
     {
         modelBuilder.HasDefaultSchema("ai_bot").HasAnnotation("ProductVersion", "10.0.0").HasAnnotation("Relational:MaxIdentifierLength", 63);
         modelBuilder.HasAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn);
+        modelBuilder.Entity("AiBot.Domain.TrackingCommand", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+            b.Property<Guid>("RobotId").HasColumnType("uuid");
+            b.Property<string>("SenderUserId").IsRequired().HasColumnType("text");
+            b.Property<string>("Status").IsRequired().HasColumnType("text");
+            b.Property<string>("Result").IsRequired().HasColumnType("text");
+            b.Property<string>("Intent").IsRequired().HasColumnType("text");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
+            b.Property<DateTimeOffset?>("StartedAt").HasColumnType("timestamp with time zone");
+            b.Property<DateTimeOffset?>("CompletedAt").HasColumnType("timestamp with time zone");
+            b.HasKey("Id"); b.HasIndex("Status", "CreatedAt"); b.HasIndex("RobotId", "SenderUserId", "CreatedAt");
+            b.ToTable("tracking_commands", "ai_bot");
+        });
+        modelBuilder.Entity("AiBot.Domain.TrackingSubscription", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+            b.Property<Guid>("RobotId").HasColumnType("uuid");
+            b.Property<string>("SenderUserId").IsRequired().HasColumnType("text");
+            b.Property<string>("Awb").IsRequired().HasColumnType("text");
+            b.Property<string>("Email").IsRequired().HasColumnType("text");
+            b.Property<string>("Type").IsRequired().HasColumnType("text");
+            b.Property<string>("Status").IsRequired().HasColumnType("text");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone");
+            b.HasKey("Id"); b.HasIndex("Awb", "Email", "Type").IsUnique(); b.HasIndex("Status", "Awb");
+            b.ToTable("tracking_subscriptions", "ai_bot");
+        });
+        modelBuilder.Entity("AiBot.Domain.TrackingPush", b =>
+        {
+            b.Property<string>("Awb").HasColumnType("text");
+            b.Property<string>("Node").HasColumnType("text");
+            b.Property<string>("PushTime").HasColumnType("text");
+            b.Property<string>("QueryAddress").HasColumnType("text");
+            b.Property<DateTimeOffset>("DetectedAt").HasColumnType("timestamp with time zone");
+            b.HasKey("Awb", "PushTime", "Node");
+            b.ToTable("tracking_pushes", "ai_bot");
+        });
+        modelBuilder.Entity("AiBot.Domain.TrackingRefresh", b =>
+        {
+            b.Property<string>("Awb").HasColumnType("text");
+            b.Property<DateTimeOffset>("QueriedAt").HasColumnType("timestamp with time zone");
+            b.Property<string>("Result").IsRequired().HasColumnType("text");
+            b.HasKey("Awb");
+            b.ToTable("tracking_refreshes", "ai_bot");
+        });
         modelBuilder.Entity("AiBot.Domain.KnowledgeEntry", b => {
             b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid"); b.Property<Guid?>("RobotId").HasColumnType("uuid");
             b.Property<string>("Question").IsRequired().HasMaxLength(300).HasColumnType("character varying(300)");
@@ -83,6 +128,7 @@ public sealed class BotDbContextModelSnapshot : ModelSnapshot
             b.Property<string>("ModelPriorityJson").IsRequired().ValueGeneratedOnAdd().HasColumnType("text").HasDefaultValue("[]");
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
             b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone");
+            b.Property<Guid?>("TrackingModelId").HasColumnType("uuid");
             b.HasKey("Id"); b.HasIndex("BotId").IsUnique(); b.ToTable("robots", "ai_bot");
         });
         modelBuilder.Entity("AiBot.Domain.MessageLog", b => {
