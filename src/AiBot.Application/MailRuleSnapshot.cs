@@ -11,6 +11,8 @@ public sealed record MailRuleSnapshot(
     Dictionary<string, string> Routes,
     [property: JsonPropertyName("customer_rules")] Dictionary<string, string> Customers)
 {
+    public Guid? RecognitionModelId { get; init; }
+
     public static MailRuleSnapshot BuiltIn(int volumeDivisor) => new(1, Math.Clamp(volumeDivisor, 1, 999999),
         new()
         {

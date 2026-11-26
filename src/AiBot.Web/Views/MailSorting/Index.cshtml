@@ -35,14 +35,31 @@
     else
     {
         <div class="mail-table-wrap"><table class="mail-table">
-            <thead><tr><th scope="col">主题</th><th scope="col">发件人</th><th scope="col">分类</th><th scope="col">状态</th><th scope="col">来源</th><th scope="col">入库时间</th></tr></thead>
+            <thead><tr><th scope="col">主题 / 发件人</th><th scope="col">来源</th><th scope="col">分类</th><th scope="col">状态</th><th scope="col">航线</th><th scope="col">识别摘要</th><th scope="col">入库时间</th></tr></thead>
             <tbody>
             @foreach (var row in Model.Rows)
             {
+                var origin = row.Summary.GetValueOrDefault("origin");
+                var destination = row.Summary.GetValueOrDefault("destination");
+                var customer = row.Summary.GetValueOrDefault("customer");
+                var cargo = string.Join(" / ", new[]
+                {
+                    row.Summary.TryGetValue("pieces", out var pieces) ? pieces + " 件" : null,
+                    row.Summary.TryGetValue("gross", out var gross) ? gross + " kg" : null,
+                    row.Summary.TryGetValue("volume", out var volume) ? volume + " CBM" : null,
+                    row.Summary.GetValueOrDefault("commodity_cn")
+                }.OfType<string>());
                 <tr>
-                    <td><a asp-action="Details" asp-route-id="@row.Id">@row.Subject</a></td>
-                    <td>@row.Sender</td><td>@MailSorting.Categories[row.Category]</td>
-                    <td>@(row.Confirmed ? "已复核" : "待复核")</td><td>@row.Source</td><td>@Display.Time(row.ReceivedAt)</td>
+                    <td><a asp-action="Details" asp-route-id="@row.Id">@row.Subject</a><small class="mail-list-sender">@row.Sender</small></td>
+                    <td>@row.Source</td><td>@MailSorting.Categories[row.Category]</td>
+                    <td>@(row.Confirmed ? "已复核" : "待复核")</td>
+                    <td>@(origin is null && destination is null ? "—" : $"{origin ?? "—"} → {destination ?? "—"}")</td>
+                    <td>
+                        @if (customer is not null) { <div>@customer</div> }
+                        @if (cargo.Length > 0) { <small>@cargo</small> }
+                        else if (customer is null) { <small>待补全</small> }
+                    </td>
+                    <td>@Display.Time(row.ReceivedAt)</td>
                 </tr>
             }
             </tbody>

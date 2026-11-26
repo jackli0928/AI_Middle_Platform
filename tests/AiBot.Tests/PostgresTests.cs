@@ -75,6 +75,13 @@ internal static class PostgresTests
             check(await repository.InsertIfNewAsync(quoteMessage, default) && !await repository.InsertIfNewAsync(quoteMessage, default)
                 && await db.AutoReplies.CountAsync(x => x.ReceivedMessageId == quoteMessage.Id && x.Status == "queued") == 1,
                 "真实 PostgreSQL 将报价单聊和唯一后台任务一起入库");
+            robot.ConfigureTracking(Guid.NewGuid()); await db.SaveChangesAsync();
+            var englishQuote = new ReceivedMessage(robot.Id, robot.Name, "english-quote", "req-english-quote", "sales-user", "",
+                "single", "text", "1 Pallet(s), 150cm × 140cm × 90cm, 445 KG  1.89CBM  to LHR", "{}", null);
+            check(await repository.InsertIfNewAsync(englishQuote, default)
+                && await db.AutoReplies.CountAsync(x => x.ReceivedMessageId == englishQuote.Id && x.Status == "queued") == 1
+                && !await db.TrackingCommands.AnyAsync(x => x.Id == englishQuote.Id),
+                "完整英文询价在配置轨迹模型时直接进入报价队列");
             robot.ConfigureAutoReply(true, "quote", true, "", []); await db.SaveChangesAsync();
             var groupQuote = new ReceivedMessage(robot.Id, robot.Name, "group-quote-once", "req-group-quote", "sales-user",
                 "wr-quote-group", "group", "text", "目的地 LAX，10件，200kg，2方", "{}", null);
@@ -297,7 +304,7 @@ internal static class PostgresTests
                 check((await gateway.SendAsync(robot.BotId, "new-secret", "single", "user", "simulated", default)).Ok, "启用和更换 Secret 后自动建立新连接");
                 db.Robots.Remove(robot); await db.SaveChangesAsync();
                 await UntilAsync(() => Task.FromResult(gateway.GetStates().Count == 0));
-                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 18, "删除机器人关闭连接并保留历史接收记录");
+                check(await db.ReceivedMessages.CountAsync(x => x.RobotId == robot.Id) == 19, "删除机器人关闭连接并保留历史接收记录");
 
                 var trackingRobot = Robot.Create("轨迹流式验证", "test-tracking-progress", secrets.Protect("tracking-secret"), "", true);
                 trackingRobot.ConfigureTracking(Guid.NewGuid());

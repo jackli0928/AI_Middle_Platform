@@ -1,36 +1,56 @@
 @using AiBot.Application
 @using AiBot.Web.Controllers
+@using AiBot.Web.Models
 @model MailSortingDetails
 @{
     ViewData["Title"] = "邮件分拣详情";
     var mail = Model.Mail;
     var category = mail.Review?.Category ?? mail.Analysis.Category;
+    var fields = MailReviewField.Create(mail, category);
+    var missing = fields.Where(row => row.Required && row.NeedsInput).ToArray();
+    var ready = fields.Where(row => row.Required && !row.NeedsInput).ToArray();
+    var optional = fields.Where(row => !row.Required).ToArray();
+    var optionalConflicts = optional.Count(row => row.Field.HasConflict && !row.HasManualValue);
+    var recognized = optional.Where(row => !row.NeedsInput || row.Field.HasConflict).ToArray();
 }
 <div class="page-heading">
     <div><h1>邮件分拣详情</h1><p>@(mail.Review?.Confirmed == true ? "已复核" : "待复核") · @mail.Analysis.Engine</p></div>
     <a class="button secondary" asp-action="Index">返回待办</a>
 </div>
 <div class="mail-details">
-    <section class="panel mail-panel">
-        <div class="panel-heading"><div><h2>@mail.Subject</h2><p>@mail.Sender · @mail.Source · @Display.Time(mail.ReceivedAt)</p></div></div>
-        <div class="mail-body">
-            <a class="button secondary" asp-action="Original" asp-route-id="@mail.Id">下载原始邮件</a>
-            <h3>正文</h3>
-            <pre class="mail-text">@mail.Analysis.Body</pre>
-            <h3>附件</h3>
-            @if (mail.Analysis.Attachments.Count == 0) { <p>无附件</p> }
-            @for (var i = 0; i < mail.Analysis.Attachments.Count; i++)
-            {
-                var part = mail.Analysis.Attachments[i];
-                <details class="mail-part">
-                    <summary>@part.Name</summary>
-                    <a asp-action="Attachment" asp-route-id="@mail.Id" asp-route-index="@i">下载原件</a>
-                    @if (part.Note is not null) { <p>@part.Note</p> }
-                    @if (part.Preview.Length > 0) { <pre class="mail-text">@part.Preview</pre> }
-                </details>
-            }
-        </div>
-    </section>
+    <div class="mail-source-column">
+        <section class="panel mail-panel">
+            <div class="panel-heading"><h2>邮件原文</h2><a class="button secondary" asp-action="Original" asp-route-id="@mail.Id">下载 .eml</a></div>
+            <div class="mail-body">
+                <h3 class="mail-original-subject">@mail.Subject</h3>
+                <dl class="mail-original-meta">
+                    <dt>发件人</dt><dd>@mail.Sender</dd>
+                    <dt>来源</dt><dd>@mail.Source</dd>
+                    <dt>入库时间</dt><dd>@Display.Time(mail.ReceivedAt)</dd>
+                </dl>
+                <h3>正文</h3>
+                <pre class="mail-text">@(string.IsNullOrWhiteSpace(mail.Analysis.Body) ? "（无正文）" : mail.Analysis.Body)</pre>
+                <h3>附件</h3>
+                @if (mail.Analysis.Attachments.Count == 0) { <p>无附件</p> }
+                @for (var i = 0; i < mail.Analysis.Attachments.Count; i++)
+                {
+                    var part = mail.Analysis.Attachments[i];
+                    <details class="mail-part">
+                        <summary>@part.Name</summary>
+                        <a asp-action="Attachment" asp-route-id="@mail.Id" asp-route-index="@i">下载原件</a>
+                        @if (part.Note is not null) { <p>@part.Note</p> }
+                        @if (part.Preview.Length > 0) { <pre class="mail-text">@part.Preview</pre> }
+                    </details>
+                }
+            </div>
+        </section>
+        <section class="panel mail-panel">
+            <div class="panel-heading"><h2>操作记录</h2></div>
+            <ul class="mail-audit">
+            @foreach (var entry in Model.Audit) { <li>@Display.Time(entry.At) · @entry.Operator · @entry.Action</li> }
+            </ul>
+        </section>
+    </div>
     <section class="panel mail-panel">
         <div class="panel-heading"><div><h2>分类与字段复核</h2><p>有多个候选值时，核对来源并填写确认值。留空时使用无冲突的识别结果。</p></div></div>
         <form class="mail-body" asp-action="Save" method="post">
@@ -44,37 +64,43 @@
                     }
                 </select>
             </div>
-            <div class="mail-fields">
-                @{ var populated = mail.Analysis.Fields.Where(f => f.HasConflict || f.Candidates.Count > 0 || mail.Review?.Fields.ContainsKey(f.Key) == true); }
-                @foreach (var field in populated)
-                {
-                    var candidates = field.Candidates.Select(c => c.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                    var edit = mail.Review?.Fields.GetValueOrDefault(field.Key);
-                    <div class="field mail-field">
-                        <label for="mail-field-@field.Key">@field.Label @if (field.HasConflict) { <span class="mail-conflict">字段冲突</span> }</label>
-                        @if (field.Key == "service") { <p>@candidates.FirstOrDefault()</p> }
-                        else
-                        {
-                            <input id="mail-field-@field.Key" name="fields[@field.Key]" maxlength="1500" value="@edit" placeholder="@(!field.HasConflict && candidates.Length == 1 ? candidates[0] : "")" />
-                        }
-                        @if (!string.IsNullOrWhiteSpace(field.ReviewEvidence))
-                        { <details class="mail-evidence"><summary>查看原文冲突证据</summary><pre class="mail-text">@field.ReviewEvidence</pre></details> }
-                        @if (field.Candidates.Count > 0)
-                        {
-                            <details class="mail-evidence"><summary>查看识别来源</summary><ul>
-                            @foreach (var candidate in field.Candidates) { <li><strong>@candidate.Value</strong> · @candidate.Source<br />@candidate.Evidence</li> }
-                            </ul></details>
-                        }
+            @if (category == "request")
+            {
+                <section class="mail-review-section mail-review-priority" aria-labelledby="mail-required-title">
+                    <div class="mail-review-section-heading">
+                        <h3 id="mail-required-title">待补录的必填字段</h3>
+                        <span class="mail-required-count @(missing.Length > 0 ? "has-missing" : "")">
+                            @(missing.Length > 0 ? $"缺 {missing.Length} 项" : "已补齐")
+                        </span>
                     </div>
-                }
-                <details class="mail-missing"><summary>补录其他字段</summary><div class="mail-fields">
-                    @foreach (var field in mail.Analysis.Fields.Except(populated))
+                    @if (missing.Length > 0)
                     {
-                        <div class="field mail-field"><label for="mail-field-@field.Key">@field.Label</label>
-                        <input id="mail-field-@field.Key" name="fields[@field.Key]" maxlength="1500" /></div>
+                        <partial name="_ReviewFieldGroups" model="missing" />
                     }
-                </div></details>
-            </div>
+                </section>
+                <details class="mail-review-section">
+                    <summary>已识别或已补录的必填字段（@ready.Length）</summary>
+                    <partial name="_ReviewFieldGroups" model="ready" />
+                </details>
+                <details class="mail-review-section" open="@(optionalConflicts > 0)">
+                    <summary>选填字段（@optional.Length）@if (optionalConflicts > 0) { <span class="mail-conflict"> · @optionalConflicts 项待核对</span> }</summary>
+                    <partial name="_ReviewFieldGroups" model="optional" />
+                </details>
+            }
+            else
+            {
+                @if (recognized.Length > 0)
+                {
+                    <section class="mail-review-section" aria-labelledby="mail-recognized-title">
+                        <h3 id="mail-recognized-title">已识别和待核对字段</h3>
+                        <partial name="_ReviewFieldGroups" model="recognized" />
+                    </section>
+                }
+                <details class="mail-review-section">
+                    <summary>补录其他字段</summary>
+                    <partial name="_ReviewFieldGroups" model="optional.Except(recognized).ToArray()" />
+                </details>
+            }
             <div class="mail-actions">
                 <button class="button secondary" name="confirmed" value="false" type="submit">保存待办</button>
                 <button class="button primary" name="confirmed" value="true" type="submit">确认复核</button>
@@ -83,13 +109,21 @@
         <form class="mail-body mail-reanalyze" asp-action="Reanalyze" method="post">
             <input type="hidden" name="id" value="@mail.Id" />
             <input type="hidden" name="revision" value="@mail.Revision" />
-            <button class="button secondary" type="submit">重新识别</button>
+            <div class="mail-actions">
+                <button class="button secondary" type="submit">重新识别</button>
+                @if (Model.RecognitionModelName is { } modelName)
+                {
+                    <button class="button primary" type="submit" name="useConfiguredModel" value="true" aria-describedby="mail-ai-input-note">AI 辅助识别 · @modelName</button>
+                }
+                else
+                {
+                    <a class="button secondary" asp-action="Rules">配置 AI 辅助识别</a>
+                }
+            </div>
+            @if (Model.RecognitionModelName is not null)
+            {
+                <small id="mail-ai-input-note">仅在点击 AI 辅助识别时，将本邮件的部分正文和附件文本发送给所选模型接口。</small>
+            }
         </form>
     </section>
 </div>
-<section class="panel mail-panel">
-    <div class="panel-heading"><h2>操作记录</h2></div>
-    <ul class="mail-audit">
-    @foreach (var entry in Model.Audit) { <li>@Display.Time(entry.At) · @entry.Operator · @entry.Action</li> }
-    </ul>
-</section>

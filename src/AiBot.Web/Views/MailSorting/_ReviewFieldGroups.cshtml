@@ -1,0 +1,47 @@
+@using AiBot.Web.Models
+@model IReadOnlyList<MailReviewField>
+@foreach (var group in Model.GroupBy(row => row.Group))
+{
+    <fieldset class="mail-field-group">
+        <legend>@group.Key</legend>
+        <div class="mail-fields">
+        @foreach (var row in group)
+        {
+            var field = row.Field;
+            <div class="field mail-field @(row.Required && row.NeedsInput ? "mail-field-needs-input" : "")">
+                @if (field.Key == "service")
+                {
+                    <strong class="mail-field-label">@field.Label</strong>
+                    <p class="mail-field-fixed">@(row.RecognizedValue ?? "空运出口")</p>
+                }
+                else
+                {
+                    <label for="mail-field-@field.Key">
+                        @field.Label
+                        @if (row.Required) { <span class="mail-field-required">必填</span> }
+                        @if (field.HasConflict)
+                        {
+                            <span class="@(row.HasManualValue ? "mail-field-required" : "mail-conflict")">@(row.HasManualValue ? "字段冲突已核对" : "字段冲突")</span>
+                        }
+                    </label>
+                    <input id="mail-field-@field.Key" name="fields[@field.Key]" maxlength="1500"
+                        value="@row.ManualValue" placeholder="@(row.RecognizedValue ?? (row.Required ? "请补录" : ""))" />
+                }
+                @if (!string.IsNullOrWhiteSpace(field.ReviewEvidence))
+                {
+                    <details class="mail-evidence"><summary>查看原文冲突证据</summary><pre class="mail-text">@field.ReviewEvidence</pre></details>
+                }
+                @if (field.Candidates.Count > 0)
+                {
+                    <details class="mail-evidence"><summary>查看识别来源</summary><ul>
+                    @foreach (var candidate in field.Candidates)
+                    {
+                        <li><strong>@candidate.Value</strong> · @candidate.Source<br />@candidate.Evidence</li>
+                    }
+                    </ul></details>
+                }
+            </div>
+        }
+        </div>
+    </fieldset>
+}

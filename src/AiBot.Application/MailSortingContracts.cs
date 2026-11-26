@@ -20,7 +20,7 @@ public interface IMailSorting
     Task<IReadOnlyList<MailAudit>> AuditAsync(Guid id, CancellationToken ct);
     Task<Guid> ImportAsync(byte[] raw, string source, string actor, string? category, CancellationToken ct);
     Task<bool> ReviewAsync(SortedMail mail, MailReview review, string actor, CancellationToken ct);
-    Task<bool> ReanalyzeAsync(SortedMail mail, string actor, CancellationToken ct);
+    Task<bool> ReanalyzeAsync(SortedMail mail, string actor, CancellationToken ct, bool useConfiguredModel = false);
     Task<byte[]?> OriginalAsync(Guid id, CancellationToken ct);
     Task<(byte[] Data, string Name)?> AttachmentAsync(Guid id, int index, CancellationToken ct);
 }

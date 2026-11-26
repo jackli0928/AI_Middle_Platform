@@ -14,6 +14,8 @@ public sealed partial class MailRuleEditor
     };
 
     public int Revision { get; set; }
+    public Guid? RecognitionModelId { get; set; }
+    public IReadOnlyList<AiModelInfo> Models { get; set; } = [];
     [Range(1, 999999, ErrorMessage = "体积重除数必须是 1 到 999999 的整数。")]
     public int VolumeDivisor { get; set; }
     public Dictionary<string, string?> Keywords { get; set; } = new();
@@ -23,7 +25,7 @@ public sealed partial class MailRuleEditor
 
     public static MailRuleEditor From(MailRuleSettings rules) => new()
     {
-        Revision = rules.Revision, VolumeDivisor = rules.Snapshot.VolumeDivisor,
+        Revision = rules.Revision, RecognitionModelId = rules.Snapshot.RecognitionModelId, VolumeDivisor = rules.Snapshot.VolumeDivisor,
         Keywords = rules.Snapshot.Keywords.ToDictionary(x => x.Key, x => (string?)string.Join('\n', x.Value)),
         Defaults = rules.Snapshot.Defaults.ToDictionary(x => x.Key, x => (string?)x.Value),
         Routes = string.Join('\n', rules.Snapshot.Routes.Select(x => $"{x.Key} = {CategoryLabel(x.Value)}")),
@@ -68,7 +70,7 @@ public sealed partial class MailRuleEditor
             key.Length <= 150 && value.Length <= 150 &&
             (!key.Contains('@') || CustomerAddress().IsMatch(key)) && customers.TryAdd(key.ToLowerInvariant(), value));
         if (customers.Count > 500) errors.Add("客户映射最多可保存 500 条。");
-        return new MailRuleSnapshot(version, VolumeDivisor, keywords, defaults, routes, customers);
+        return new MailRuleSnapshot(version, VolumeDivisor, keywords, defaults, routes, customers) { RecognitionModelId = RecognitionModelId };
     }
 
     private static string CategoryLabel(string key) => MailSorting.Categories.GetValueOrDefault(key, "按内容识别");

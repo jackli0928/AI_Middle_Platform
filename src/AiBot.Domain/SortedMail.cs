@@ -14,5 +14,8 @@ public sealed record MailReview(string Category, Dictionary<string, string> Fiel
 public sealed record SortedMail(Guid Id, string Fingerprint, string Subject, string Sender, string Source,
     DateTimeOffset ReceivedAt, int Revision, MailAnalysis Analysis, MailReview? Review);
 public sealed record MailListItem(Guid Id, string Subject, string Sender, string Source, string Category,
-    bool Confirmed, DateTimeOffset ReceivedAt);
+    bool Confirmed, DateTimeOffset ReceivedAt)
+{
+    public IReadOnlyDictionary<string, string> Summary { get; init; } = new Dictionary<string, string>();
+}
 public sealed record MailAudit(string Action, string Operator, DateTimeOffset At);

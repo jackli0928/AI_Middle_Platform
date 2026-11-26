@@ -70,6 +70,24 @@
         </div>
     </section>
 
+    <section class="panel mail-panel">
+        <div class="panel-heading"><h2>AI 辅助识别</h2></div>
+        <div class="mail-body">
+            <div class="field">
+                <label asp-for="RecognitionModelId">邮件识别模型</label>
+                <select asp-for="RecognitionModelId" aria-describedby="recognition-model-help">
+                    <option value="">关闭 AI 辅助识别</option>
+                    @if (Model.RecognitionModelId is { } selectedModel && Model.Models.All(x => x.Id != selectedModel))
+                    { <option value="@selectedModel">原选模型不可用，请重新选择</option> }
+                    @foreach (var item in Model.Models)
+                    { <option value="@item.Id">@item.Name · @item.ModelId</option> }
+                </select>
+                <small id="recognition-model-help">在邮件详情点击「AI 辅助识别」时，系统将当前邮件的部分正文和附件提取文本交给所选接口。</small>
+                <a asp-controller="AiModels" asp-action="Index">管理 AI 模型接口</a>
+            </div>
+        </div>
+    </section>
+
     <div class="mail-actions mail-rule-actions">
         <button type="submit" class="button primary">保存规则</button>
         <a class="button secondary" asp-action="Rules">重新载入已保存规则</a>

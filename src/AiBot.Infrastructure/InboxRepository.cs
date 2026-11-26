@@ -31,12 +31,14 @@ public sealed class InboxRepository(BotDbContext db) : IInboxRepository
             """, ct);
         if (count == 1 && m.MessageType == "text")
         {
+            var directQuote = QuoteInquiryParser.IsCompleteInquiry(m.Content);
             if (m.ChatType == "single" && MessageSender.IsHuman(m))
                 await db.Database.ExecuteSqlInterpolatedAsync($"""
                     INSERT INTO ai_bot.tracking_commands ("Id", "RobotId", "SenderUserId", "Status", "Result", "Intent", "CreatedAt")
                     SELECT {m.Id}, r."Id", {m.SenderUserId}, 'queued', '', '', {m.ReceivedAt}
                     FROM ai_bot.robots r
                     WHERE r."Id" = {m.RobotId} AND r."Enabled" AND r."TrackingModelId" IS NOT NULL
+                        AND NOT ({directQuote} AND r."AutoReplyEnabled" AND r."ReplyMode" = 'quote')
                     """, ct);
             var logId = Guid.NewGuid();
             var now = DateTimeOffset.UtcNow;

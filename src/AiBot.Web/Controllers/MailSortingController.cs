@@ -9,7 +9,7 @@ namespace AiBot.Web.Controllers;
 
 [Authorize]
 public sealed class MailSortingController(IMailSorting sorting, IMailboxCredentials credentials,
-    IMailboxSettings mailboxSettings, IOptions<MailSortingOptions> options, DatabaseState database, IMailRuleSettings rules) : Controller
+    IMailboxSettings mailboxSettings, IOptions<MailSortingOptions> options, DatabaseState database, IMailRuleSettings rules, IAutomationSettingsService automation) : Controller
 {
     [HttpGet]
     public async Task<IActionResult> Rules(CancellationToken ct)
@@ -17,7 +17,9 @@ public sealed class MailSortingController(IMailSorting sorting, IMailboxCredenti
         if (!database.Ready) return StatusCode(503, "数据库尚未就绪。");
         var current = await rules.ReadAsync(ct);
         ViewData["RuleVersion"] = current.Snapshot.Version;
-        return View(MailRuleEditor.From(current));
+        var editor = MailRuleEditor.From(current);
+        editor.Models = await AvailableModelsAsync(ct);
+        return View(editor);
     }
 
     [HttpPost]
@@ -26,6 +28,9 @@ public sealed class MailSortingController(IMailSorting sorting, IMailboxCredenti
         if (!database.Ready) return StatusCode(503, "数据库尚未就绪。");
         var current = await rules.ReadAsync(ct);
         ViewData["RuleVersion"] = current.Snapshot.Version;
+        editor.Models = await AvailableModelsAsync(ct);
+        if (editor.RecognitionModelId is { } modelId && editor.Models.All(x => x.Id != modelId))
+            ModelState.AddModelError(nameof(editor.RecognitionModelId), "请选择已启用且已配置密钥的 AI 模型接口。");
         var errors = new List<string>();
         var snapshot = editor.CreateSnapshot(current.Snapshot.Version + 1, errors);
         foreach (var error in errors) ModelState.AddModelError("", error);
@@ -38,6 +43,9 @@ public sealed class MailSortingController(IMailSorting sorting, IMailboxCredenti
         TempData["Success"] = "邮件识别规则已保存，并用于后续识别。";
         return RedirectToAction(nameof(Rules));
     }
+
+    private async Task<IReadOnlyList<AiModelInfo>> AvailableModelsAsync(CancellationToken ct) =>
+        (await automation.ModelsAsync(ct)).Where(x => x.Enabled && x.HasApiKey).ToArray();
 
     private string Actor => User.Identity?.Name ?? "管理员";
 
@@ -60,7 +68,9 @@ public sealed class MailSortingController(IMailSorting sorting, IMailboxCredenti
     {
         if (!database.Ready) return StatusCode(503, "数据库尚未就绪。");
         if (await sorting.FindAsync(id, ct) is not { } mail) return NotFound();
-        return View(new MailSortingDetails(mail, await sorting.AuditAsync(id, ct)));
+        var modelId = (await rules.ReadAsync(ct)).Snapshot.RecognitionModelId;
+        var model = modelId is null ? null : (await AvailableModelsAsync(ct)).FirstOrDefault(x => x.Id == modelId);
+        return View(new MailSortingDetails(mail, await sorting.AuditAsync(id, ct), model?.Name));
     }
 
     [HttpPost, RequestSizeLimit(MailSorting.MaxMailBytes + 65536)]
@@ -116,12 +126,16 @@ public sealed class MailSortingController(IMailSorting sorting, IMailboxCredenti
     }
 
     [HttpPost]
-    public async Task<IActionResult> Reanalyze(Guid id, int revision, CancellationToken ct)
+    public async Task<IActionResult> Reanalyze(Guid id, int revision, CancellationToken ct, bool useConfiguredModel = false)
     {
         if (!database.Ready) return StatusCode(503, "数据库尚未就绪。");
         if (await sorting.FindAsync(id, ct) is not { } mail) return NotFound();
-        if (mail.Revision != revision || !await sorting.ReanalyzeAsync(mail, Actor, ct)) return Changed(id);
-        TempData["Success"] = "识别已更新，人工录入已保留。";
+        try
+        {
+            if (mail.Revision != revision || !await sorting.ReanalyzeAsync(mail, Actor, ct, useConfiguredModel)) return Changed(id);
+        }
+        catch (InvalidMailException ex) { return ReviewError(id, ex.Message); }
+        TempData["Success"] = useConfiguredModel ? "识别已更新，请查看识别引擎和字段来源。" : "识别已更新，人工录入已保留。";
         return RedirectToAction(nameof(Details), new { id });
     }
 
@@ -220,7 +234,7 @@ public sealed class MailSortingController(IMailSorting sorting, IMailboxCredenti
 
 public sealed record MailSortingList(IReadOnlyList<MailListItem> Rows, string Search, string Category, string Status,
     int Page, bool HasNext);
-public sealed record MailSortingDetails(SortedMail Mail, IReadOnlyList<MailAudit> Audit);
+public sealed record MailSortingDetails(SortedMail Mail, IReadOnlyList<MailAudit> Audit, string? RecognitionModelName);
 public sealed record MailSortingMailbox(int Index, string Name, string Host, string Username, string Protocol,
     bool Enabled, bool HasPassword);
 

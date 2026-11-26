@@ -12,7 +12,7 @@ namespace AiBot.Infrastructure;
 
 public sealed class LegacyMailAnalyzer(IOptions<MailSortingOptions> options, ILogger<LegacyMailAnalyzer> logger, LegacyMailRuleSource? rules = null)
 {
-    public async Task<MailAnalysis?> AnalyzeAsync(byte[] raw, MailAnalysis native, string? category, CancellationToken ct, IReadOnlyList<byte[]>? related = null, MailRuleSnapshot? snapshot = null)
+    public async Task<MailAnalysis?> AnalyzeAsync(byte[] raw, MailAnalysis native, string? category, CancellationToken ct, IReadOnlyList<byte[]>? related = null, MailRuleSnapshot? snapshot = null, bool allowOllama = true)
     {
         var configuration = options.Value;
         var python = configuration.PythonExecutable;
@@ -28,7 +28,7 @@ public sealed class LegacyMailAnalyzer(IOptions<MailSortingOptions> options, ILo
             StandardOutputEncoding = Encoding.UTF8
         };
         foreach (var argument in new[] { "-I", "-B", "-X", "utf8", "-c", Parser, source, category ?? "",
-            rules?.Path ?? "", configuration.OllamaModel, Math.Clamp(configuration.VolumeDivisor, 1, 1_000_000).ToString(System.Globalization.CultureInfo.InvariantCulture) })
+            rules?.Path ?? "", allowOllama ? configuration.OllamaModel : "", Math.Clamp(configuration.VolumeDivisor, 1, 1_000_000).ToString(System.Globalization.CultureInfo.InvariantCulture) })
             start.ArgumentList.Add(argument);
 
         using var process = new Process { StartInfo = start };

@@ -55,6 +55,10 @@ public interface IAutomationSettingsService
     Task DeleteModelAsync(Guid id, CancellationToken ct);
     Task<AutoReplyLog?> ReplyForMessageAsync(Guid id, CancellationToken ct);
 }
+public interface IMailAiCompletionClient
+{
+    Task<string> CompleteMailAsync(AiModelEndpoint model, string prompt, string data, CancellationToken ct);
+}
 public interface IAiCompletionClient { Task<string> CompleteAsync(AiModelEndpoint model, string prompt, string message, CancellationToken ct); }
 public interface IAutoReplyService { Task HandleAsync(Guid robotId, string connectionBotId, ReceivedMessage message, CancellationToken ct); }
 public sealed class AiCompletionException(string message) : Exception(message);

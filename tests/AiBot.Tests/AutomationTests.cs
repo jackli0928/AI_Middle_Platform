@@ -109,6 +109,19 @@ internal static class AutomationTests
         var shorthandFields = QuoteInquiryParser.Parse(shorthand);
         check((int)shorthandFields["piece"] == 2 && (double)shorthandFields["gross_weight"] == 589.19
             && (string)shorthandFields["destination"] == "HYD", "英文托盘、kgs 和飞往机场的简写可识别");
+        var englishInquiry = "1 Pallet(s), 150cm × 140cm × 90cm, 445 KG  1.89CBM  to LHR";
+        var englishStep = QuoteDialogue.Apply(new QuoteDialogueState(), englishInquiry, new Dictionary<string, object>());
+        check(englishStep.Ready && (string)englishStep.Calls[0]["destination"] == "LHR"
+            && (int)englishStep.Calls[0]["piece"] == 1 && (double)englishStep.Calls[0]["gross_weight"] == 445
+            && Math.Abs((double)englishStep.Calls[0]["volume"] - 1.89) < 0.000001,
+            "英文 to 机场码完整询价不依赖模型即可查价");
+        check((string)QuoteInquiryParser.Parse("To ALA，2件150KG，1.5CBM")["destination"] == "ALA"
+            && !QuoteInquiryParser.Parse("Toronto，2件150KG，1.5CBM").ContainsKey("destination"),
+            "英文 To 机场码可识别，普通英文单词不误判为目的地");
+        check(QuoteInquiryParser.IsCompleteInquiry(englishInquiry)
+            && !QuoteInquiryParser.IsCompleteInquiry("订阅 LHR 轨迹，2件150KG，1.5CBM")
+            && !QuoteInquiryParser.IsCompleteInquiry("to LHR，2件150KG"),
+            "完整询价可直达报价，轨迹指令与缺项询价仍走原分流");
         var shorthandStep = QuoteDialogue.Apply(new QuoteDialogueState(), shorthand, new Dictionary<string, object>());
         check(shorthandStep.Ready && shorthandStep.Calls.Count == 2
             && shorthandStep.Calls[0]["origin"].Equals("SZX") && shorthandStep.Calls[1]["origin"].Equals("CAN")

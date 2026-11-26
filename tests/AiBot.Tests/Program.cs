@@ -124,6 +124,8 @@ foreach (var path in new[] { "/", "/Robots", "/Robots/Send", "/Messages", "/Acco
 var disabled = Robot.Create("停用", "disabled", "encrypted", "", false); factory.Repository.Add(disabled);
 await InboxTests.RunAsync(factory, client, Check);
 await MailSortingTests.RunMvcChecksAsync(factory, client, Check);
+MailSortingTests.RunBookingInstructionChecks(Check);
+await MailSortingTests.RunConfiguredModelChecksAsync(Check);
 await Reject(() => robots.SendAsync(new SendInput { RobotId = disabled.Id, UserId = "test", Content = "test" }, "reviewer", default), "停用机器人禁止发送");
 await robots.DeleteAsync(robotEntity.Id, default);
 Check(factory.Repository.Messages.Count == 3, "删除机器人保留单聊和群聊历史消息");

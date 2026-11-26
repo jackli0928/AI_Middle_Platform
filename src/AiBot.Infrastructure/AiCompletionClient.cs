@@ -6,15 +6,24 @@ using AiBot.Domain;
 
 namespace AiBot.Infrastructure;
 
-public sealed class AiCompletionClient(HttpClient http, ISecretProtector secrets) : IAiCompletionClient
+public sealed class AiCompletionClient(HttpClient http, ISecretProtector secrets) : IAiCompletionClient, IMailAiCompletionClient
 {
-    public async Task<string> CompleteAsync(AiModelEndpoint model, string prompt, string message, CancellationToken ct)
+    public Task<string> CompleteAsync(AiModelEndpoint model, string prompt, string message, CancellationToken ct)
+    {
+        var instructions = "你是企业微信中的工作助手。请用中文简洁回答当前用户问题，不确定时明确说明，不虚构事实。回复控制在 1000 字以内。"
+            + (string.IsNullOrWhiteSpace(prompt) ? "" : "\n" + prompt);
+        return SendAsync(model, instructions, message, ct);
+    }
+
+    public Task<string> CompleteMailAsync(AiModelEndpoint model, string prompt, string data, CancellationToken ct) =>
+        SendAsync(model, prompt, data, ct);
+
+    private async Task<string> SendAsync(AiModelEndpoint model, string instructions, string message, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(model.TimeoutSeconds));
         using var request = new HttpRequestMessage(HttpMethod.Post, model.Endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", secrets.Unprotect(model.ProtectedApiKey));
-        var instructions = "你是企业微信中的工作助手。请用中文简洁回答当前用户问题，不确定时明确说明，不虚构事实。回复控制在 1000 字以内。" + (string.IsNullOrWhiteSpace(prompt) ? "" : "\n" + prompt);
         request.Content = model.ApiStyle == "responses"
             ? JsonContent.Create(new { model = model.ModelId, instructions, input = message, max_output_tokens = model.MaxOutputTokens, store = false })
             : JsonContent.Create(new { model = model.ModelId, messages = new[] { new { role = "system", content = instructions }, new { role = "user", content = message } }, max_tokens = model.MaxOutputTokens, stream = false });

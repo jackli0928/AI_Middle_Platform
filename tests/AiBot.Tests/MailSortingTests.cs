@@ -39,6 +39,85 @@ internal static class MailSortingTests
             "控制台概览位于 AI 机器人模块中");
     }
 
+    public static void RunBookingInstructionChecks(Action<bool, string> check)
+    {
+        var fields = MailFieldCatalog.Fields.Where(definition => definition.Key != "cargo_handover").Select(definition => new MailField(definition.Key, definition.Label,
+            definition.Key switch
+            {
+                "gross" => [new("110", "附件", "110kg")],
+                "volume" => [new("0.70", "附件", "0.70CBM")],
+                "trade" => [new("(Incoterm)：cif", "附件", "Incoterm：CIF")],
+                "volume_weight" => [new("116.667", "原工作台解析", "自动计算 · 0.7 CBM")],
+                _ => []
+            })).ToArray();
+        var original = new MailAnalysis("request", """
+            直客预付货，上海示例，定自己CZ 直飞 PKX-ICN，11月16号航班，条款CFR，预计11/14号交北京，需要倒车，请今天发入仓图
+            118kg 0.6cbm  5桶 注意 CZ 是窄体 不能打托。
+            卖价 100kg: 8.5/kg
+            客户要求：需要缠膜
+            --完
+            120kg 0.8cbm 6桶
+            """, fields, [], "规则", []);
+        var result = BookingInstructionRules.Enrich(original, "空运出口指令", new DateOnly(2026, 11, 10));
+        MailField Field(string key) => result.Fields.Single(field => field.Key == key);
+        string Value(string key) => Field(key).Candidates.Single().Value;
+        check(Value("carrier") == "CZ" && Value("etd") == "2026-11-16" && Value("pieces") == "5" &&
+            Value("packaging") == "桶" && Value("sell_rate") == "8.5" && Value("freight_payment") == "预付" &&
+            Value("cargo_handover") == "2026-11-14 交北京" && Value("customer") == "上海示例" &&
+            Value("handling").Contains("不能打托"), "订舱指令补提航司、日期、包装、运价和交货要求");
+        check(Field("gross").HasConflict && Field("volume").HasConflict && Field("trade").HasConflict &&
+            Field("gross").Candidates.Count == 2 && Field("trade").Candidates.Any(candidate => candidate.Value == "CFR") &&
+            Field("volume_weight").Candidates.Count == 0, "订舱正文与附件冲突保留双方证据并隐藏有争议的自动计费重");
+    }
+
+    public static async Task RunConfiguredModelChecksAsync(Action<bool, string> check)
+    {
+        var repository = new MemoryAutomationRepository(new MemoryRepository());
+        var endpoint = new AiModelEndpoint();
+        endpoint.Update("测试模型", "测试提供方", "https://example.invalid/chat", "model-test", "chat", "fake-key", true, 5, 1024);
+        repository.Add(endpoint);
+        var client = new MailAiFake();
+        var suggestions = new ConfiguredMailModel(repository, client);
+        var baseline = new MailAnalysis("review", "不定期订舱件重 18 件", [
+            new("pieces", "件数", []),
+            new("gross", "毛重", [new("99", "规则", "毛重99")]),
+            new("flight", "航班", []),
+            new("mawb", "运单号", [], RequiresReview: true)
+        ], [], "规则", []);
+        var mail = new SortedMail(Guid.NewGuid(), "fingerprint", "测试案", "private-address@example.invalid",
+            "导入", DateTimeOffset.UtcNow, 1, baseline, new("review", new() { ["flight"] = "AB789" }, false));
+        var output = await suggestions.SuggestAsync(endpoint.Id, mail, baseline, null, default);
+        check(client.ModelId == endpoint.Id && !client.Data.Contains(mail.Sender) &&
+            output.Category == "request" && output.Fields[0].Candidates.Single().Value == "18" &&
+            output.Fields[1].Candidates.Single().Value == "99" && output.Fields[2].Candidates.Count == 0 &&
+            output.Fields[3].HasConflict && output.Fields[3].Candidates.Count == 0,
+            "邮件模型复用所选接口，仅采纳有原文证据的缺失字段并保留规则和人工字段");
+        client.Output = "bad response";
+        var fallback = await suggestions.SuggestAsync(endpoint.Id, mail, baseline, "review", default);
+        check(fallback.Engine.Contains("已采用规则结果") && fallback.Category == baseline.Category &&
+            fallback.Fields.SequenceEqual(baseline.Fields), "邮件模型异常时保留规则结果");
+    }
+
+    private sealed class MailAiFake : IMailAiCompletionClient
+    {
+        public Guid ModelId { get; private set; }
+        public string Data { get; private set; } = "";
+        public string Output { get; set; } = """
+            {"classification":{"category":"request","source":"body","quote":"不定期订舱"},
+            "fields":[{"key":"pieces","value":"88","source":"body","quote":"不存在的内容"},
+            {"key":"pieces","value":"18","source":"body","quote":"18 件"},
+            {"key":"gross","value":"18","source":"body","quote":"18 件"},
+            {"key":"flight","value":"18","source":"body","quote":"18 件"},
+            {"key":"mawb","value":"18","source":"body","quote":"18 件"}]}
+            """;
+        public Task<string> CompleteMailAsync(AiModelEndpoint model, string prompt, string data, CancellationToken ct)
+        {
+            ModelId = model.Id;
+            Data = data;
+            return Task.FromResult(Output);
+        }
+    }
+
     public static async Task RunPostgresAsync(BotDbContext db, DbContextOptions<BotDbContext> dbOptions, Action<bool, string> check)
     {
         var options = Options.Create(new MailSortingOptions());
@@ -79,7 +158,10 @@ internal static class MailSortingTests
         check(reanalyzed.Review?.Fields["pieces"] == "11" && reanalyzed.Review.Confirmed &&
             (await sorting.AuditAsync(id, default)).Select(x => x.Action).SequenceEqual(new[] { "重新识别", "确认复核", "收件" }),
             "重新识别保留人工确认值并记录操作人");
-        check((await sorting.ListAsync("pvg", "request", "true", 1, default)).Single().Id == id,
+        var listed = (await sorting.ListAsync("pvg", "request", "true", 1, default)).Single();
+        check(listed.Summary["origin"] == "PVG" && listed.Summary["destination"] == "LAX" && listed.Summary["pieces"] == "11",
+            "待办列表显示航线及人工确认的字段摘要");
+        check(listed.Id == id,
             "邮件待办按主题、分类和状态筛选");
 
         var reply = Encoding.UTF8.GetBytes("""
@@ -189,6 +271,14 @@ internal static class MailSortingTests
         var details = await client.GetStringAsync(detailsUri);
         check(WebUtility.HtmlDecode(details).Contains("字段冲突") && details.Contains("packing.txt"),
             "分拣详情显示真实字段冲突和附件");
+        var rendered = WebUtility.HtmlDecode(details);
+        var requiredAt = rendered.IndexOf("待补录的必填字段", StringComparison.Ordinal);
+        var readyAt = rendered.IndexOf("已识别或已补录的必填字段", StringComparison.Ordinal);
+        var optionalAt = rendered.IndexOf("选填字段", StringComparison.Ordinal);
+        var missingSalespersonAt = rendered.IndexOf("id=\"mail-field-salesperson\"", StringComparison.Ordinal);
+        var optionalReferenceAt = rendered.IndexOf("id=\"mail-field-reference\"", StringComparison.Ordinal);
+        check(requiredAt >= 0 && missingSalespersonAt > requiredAt && readyAt > missingSalespersonAt &&
+            optionalAt > readyAt && optionalReferenceAt > optionalAt, "订舱申请先显示待补必填字段，已填必填和选填字段分别展示");
         var id = detailsUri.OriginalString.Split('/').Last();
         var revision = Regex.Match(details, "name=\"revision\" value=\"([0-9]+)\"").Groups[1].Value;
         using var review = new FormUrlEncodedContent(new Dictionary<string, string>

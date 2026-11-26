@@ -12,10 +12,11 @@ using NpgsqlTypes;
 namespace AiBot.Infrastructure;
 
 public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOptions> options,
-    MailModelSuggestions model, LegacyMailAnalyzer? legacy = null, LegacyMailRuleSource? rules = null, IMailboxSettings? mailboxes = null, IMailRuleSettings? ruleSettings = null) : IMailSorting
+    MailModelSuggestions model, LegacyMailAnalyzer? legacy = null, LegacyMailRuleSource? rules = null, IMailboxSettings? mailboxes = null, IMailRuleSettings? ruleSettings = null, ConfiguredMailModel? configuredModel = null) : IMailSorting
 {
     private NpgsqlConnection Connection => (NpgsqlConnection)db.Database.GetDbConnection();
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static readonly string[] SummaryKeys = ["origin", "destination", "customer", "pieces", "gross", "volume", "commodity_cn"];
     private const string Columns = "id, fingerprint, subject, sender, source, received_at, revision, analysis::text, review::text";
 
     public async Task<IReadOnlyList<MailListItem>> ListAsync(string search, string category, string status, int page, CancellationToken ct)
@@ -23,7 +24,10 @@ public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOpt
         await db.Database.OpenConnectionAsync(ct);
         await using var command = new NpgsqlCommand("""
             SELECT id, subject, sender, source, coalesce(review->>'category', analysis->>'category') AS category,
-                coalesce((review->>'confirmed')::boolean, false) AS confirmed, received_at
+                coalesce((review->>'confirmed')::boolean, false) AS confirmed, received_at,
+                (SELECT jsonb_agg(field)::text
+                 FROM jsonb_array_elements(analysis->'fields') AS field WHERE field->>'key' = ANY(@summary_keys)),
+                (review->'fields')::text
             FROM ai_bot.sorted_mail
             WHERE (@query = '' OR strpos(lower(subject), lower(@query)) > 0 OR strpos(lower(sender), lower(@query)) > 0)
               AND (@category = '' OR coalesce(review->>'category', analysis->>'category') = @category)
@@ -31,6 +35,7 @@ public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOpt
             ORDER BY received_at DESC, id DESC LIMIT @limit OFFSET @offset
             """, Connection);
         command.Parameters.AddWithValue("query", search);
+        command.Parameters.AddWithValue("summary_keys", SummaryKeys);
         command.Parameters.AddWithValue("category", category);
         command.Parameters.AddWithValue("status", status);
         command.Parameters.AddWithValue("limit", MailSorting.PageSize + 1);
@@ -39,8 +44,26 @@ public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOpt
         List<MailListItem> list = [];
         while (await reader.ReadAsync(ct))
             list.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                reader.GetString(4), reader.GetBoolean(5), reader.GetFieldValue<DateTimeOffset>(6)));
+                reader.GetString(4), reader.GetBoolean(5), reader.GetFieldValue<DateTimeOffset>(6))
+            {
+                Summary = ReadSummary(reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8))
+            });
         return list;
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadSummary(string? analysis, string? review)
+    {
+        var summary = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (analysis is not null)
+            foreach (var field in JsonSerializer.Deserialize<MailField[]>(analysis, Json) ?? [])
+                if (!field.HasConflict && field.Candidates.FirstOrDefault() is { Value.Length: > 0 } candidate)
+                    summary[field.Key] = candidate.Value;
+        if (review is not null)
+            foreach (var (key, value) in JsonSerializer.Deserialize<Dictionary<string, string>>(review, Json) ?? [])
+                if (SummaryKeys.Contains(key) && !string.IsNullOrWhiteSpace(value))
+                    summary[key] = value;
+        return summary;
     }
 
     public async Task<SortedMail?> FindAsync(Guid id, CancellationToken ct)
@@ -105,7 +128,7 @@ public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOpt
     public Task<bool> ReviewAsync(SortedMail mail, MailReview review, string actor, CancellationToken ct) =>
         UpdateAsync(mail, "review", review, review.Confirmed ? "确认复核" : "保存复核", actor, ct);
 
-    public async Task<bool> ReanalyzeAsync(SortedMail mail, string actor, CancellationToken ct)
+    public async Task<bool> ReanalyzeAsync(SortedMail mail, string actor, CancellationToken ct, bool useConfiguredModel = false)
     {
         await db.Database.OpenConnectionAsync(ct);
         await using var command = new NpgsqlCommand("SELECT original, fixed_category FROM ai_bot.sorted_mail WHERE id = @id", Connection);
@@ -118,8 +141,14 @@ public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOpt
             raw = reader.GetFieldValue<byte[]>(0);
             category = mail.Review?.Category ?? (reader.IsDBNull(1) ? null : reader.GetString(1));
         }
-        var analysis = await AnalyzeAsync(raw, MailMessageReader.Read(raw), category, mail.Fingerprint, await ReadRulesAsync(ct), ct);
-        return await UpdateAsync(mail, "analysis", analysis, "重新识别", actor, ct);
+        var snapshot = await ReadRulesAsync(ct);
+        if (useConfiguredModel && (snapshot?.RecognitionModelId is null || configuredModel is null))
+            throw new InvalidMailException("请先在邮件识别规则中选择可用的 AI 模型接口。");
+        var mime = MailMessageReader.Read(raw);
+        var analysis = await AnalyzeAsync(raw, mime, category, mail.Fingerprint, snapshot, ct, useConfiguredModel);
+        if (useConfiguredModel)
+            analysis = await configuredModel!.SuggestAsync(snapshot!.RecognitionModelId!.Value, mail, analysis, category, ct);
+        return await UpdateAsync(mail, "analysis", analysis, useConfiguredModel ? "AI 辅助识别" : "重新识别", actor, ct);
     }
 
     public async Task<byte[]?> OriginalAsync(Guid id, CancellationToken ct)
@@ -140,7 +169,7 @@ public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOpt
         return await command.ExecuteScalarAsync(ct) as Guid?;
     }
 
-    private async Task<MailAnalysis> AnalyzeAsync(byte[] raw, MimeMessage mime, string? category, string? existing, MailRuleSnapshot? snapshot, CancellationToken ct)
+    private async Task<MailAnalysis> AnalyzeAsync(byte[] raw, MimeMessage mime, string? category, string? existing, MailRuleSnapshot? snapshot, CancellationToken ct, bool rulesOnly = false)
     {
         var references = mime.References.Reverse().Prepend(mime.InReplyTo).OfType<string>()
             .Where(x => !string.IsNullOrWhiteSpace(x)).Take(20).Select(MessageKey).Distinct().Where(x => x != existing).ToArray();
@@ -167,8 +196,12 @@ public sealed class PostgresMailSorting(BotDbContext db, IOptions<MailSortingOpt
         var subject = MailMessageReader.Trim(mime.Subject, 1000);
         var result = MailSortingRules.Analyze(subject, MailMessageReader.Body(mime), MailMessageReader.Previews(mime),
             references, category, related, snapshot?.VolumeDivisor ?? Math.Clamp(options.Value.VolumeDivisor, 1, 1_000_000), snapshot);
-        var original = legacy is null ? null : await legacy.AnalyzeAsync(raw, result, category, ct, relatedOriginals, snapshot);
-        return original ?? await model.SuggestAsync(subject, result, category, ct);
+        var original = legacy is null ? null : await legacy.AnalyzeAsync(raw, result, category, ct, relatedOriginals, snapshot, allowOllama: !rulesOnly);
+        var parsed = original ?? result;
+        DateOnly? mailDate = mime.Headers.Contains(HeaderId.Date) && mime.Date != DateTimeOffset.MinValue
+            ? DateOnly.FromDateTime(mime.Date.Date) : null;
+        var enriched = BookingInstructionRules.Enrich(parsed, subject, mailDate);
+        return original is not null || rulesOnly ? enriched : await model.SuggestAsync(subject, enriched, category, ct);
     }
 
     private async Task<MailRuleSnapshot?> ReadRulesAsync(CancellationToken ct) =>

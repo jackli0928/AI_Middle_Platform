@@ -5,11 +5,25 @@ namespace AiBot.Application;
 
 public static partial class QuoteInquiryParser
 {
+    public static bool IsCompleteInquiry(string content)
+    {
+        if (TrackingOperationPattern().IsMatch(content)) return false;
+        var fields = Parse(content);
+        return fields.ContainsKey("destination") && fields.ContainsKey("piece")
+            && fields.ContainsKey("gross_weight") && fields.ContainsKey("volume");
+    }
+
     public static Dictionary<string, object> Parse(string content)
     {
         var fields = new Dictionary<string, object>();
         var destination = DestinationPattern().Matches(content);
         if (destination.Count == 1) fields["destination"] = destination[0].Groups[1].Value.ToUpperInvariant();
+        else if (destination.Count == 0)
+        {
+            var englishDestination = EnglishDestinationPattern().Matches(content);
+            if (englishDestination.Count == 1)
+                fields["destination"] = englishDestination[0].Groups[1].Value.ToUpperInvariant();
+        }
 
         var totalPieces = TotalPiecePattern().Matches(content);
         var pieces = PiecePattern().Matches(content);
@@ -31,6 +45,12 @@ public static partial class QuoteInquiryParser
 
     [GeneratedRegex(@"(?:目的地|到|至|飞)\s*[：:]?\s*([A-Za-z]{3}|[\u4e00-\u9fff]{2,12})(?![A-Za-z\u4e00-\u9fff])", RegexOptions.IgnoreCase)]
     private static partial Regex DestinationPattern();
+
+    [GeneratedRegex(@"(?<![A-Za-z])to\s+([A-Za-z]{3})(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    private static partial Regex EnglishDestinationPattern();
+
+    [GeneratedRegex(@"订阅|取消|轨迹|监控|推送|主单|运单|邮件", RegexOptions.IgnoreCase)]
+    private static partial Regex TrackingOperationPattern();
 
     [GeneratedRegex(@"(?<![\d.])(\d{1,9})\s*(?:件|箱|托|PCS|CTNS|PLTS?|PALLETS?|PIECES?|CARTONS?)(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex PiecePattern();

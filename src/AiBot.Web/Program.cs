@@ -45,6 +45,9 @@ builder.Services.AddHostedService<TrackingWorker>();
 builder.Services.AddHostedService<TrackingPollWorker>();
 builder.Services.Configure<MailSortingOptions>(builder.Configuration.GetSection("MailSorting"));
 builder.Services.AddScoped<IMailSorting, PostgresMailSorting>();
+builder.Services.AddScoped<ConfiguredMailModel>();
+builder.Services.AddHttpClient<IMailAiCompletionClient, AiCompletionClient>()
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 builder.Services.AddScoped<IMailboxCredentials, PostgresMailboxCredentials>();
 builder.Services.AddScoped<IMailboxSettings, PostgresMailboxSettings>();
 builder.Services.AddSingleton<MailboxPoller>();
